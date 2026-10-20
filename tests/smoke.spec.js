@@ -1198,4 +1198,65 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
 
     expect(errors).toEqual([]);
   });
+  test("fase 11: pwa manifest, prontidao offline e operacao de palco sem rede", async ({ page, request }) => {
+    // 1. Verifica headers e conteudo do manifest
+    const manifestRes = await request.get("/manifest.webmanifest");
+    expect(manifestRes.status()).toBe(200);
+    const manifest = await manifestRes.json();
+    expect(manifest.name).toBe("Caderno de Cifras e Setlists");
+    expect(manifest.display).toBe("standalone");
+    expect(manifest.icons.length).toBeGreaterThanOrEqual(2);
+
+    // 2. Verifica disponibilidade do Service Worker
+    const swRes = await request.get("/sw.js");
+    expect(swRes.status()).toBe(200);
+    expect(swRes.headers()["content-type"]).toContain("javascript");
+
+    // 3. Inicializa a aplicacao
+    const errors = await setupPage(page);
+    await gotoRoute(page, "#/setlists/setlist-1");
+
+    // 4. Verifica presenca das tags no head
+    const manifestTag = page.locator('link[rel="manifest"]');
+    await expect(manifestTag).toHaveAttribute("href", "manifest.webmanifest");
+    const iconTag = page.locator('link[rel="icon"]');
+    await expect(iconTag).toHaveAttribute("href", "icon.svg");
+
+    // 5. Verifica indicador de setlist pronta offline
+    const setlistBadge = page.locator("#setlist-offline-badge");
+    await expect(setlistBadge).toBeVisible();
+    await expect(setlistBadge).toContainText("Músicas e partituras prontas para tocar offline");
+
+    // 6. Entra no modo palco e checa badge de palco offline
+    await page.click('[data-action="enter-stage"]');
+    const stageBadge = page.locator("#stage-offline-badge");
+    await expect(stageBadge).toBeVisible();
+    await expect(stageBadge).toContainText("Palco offline");
+
+    // 7. Simula desconexao total de rede (offline no palco)
+    await page.context().setOffline(true);
+
+    // 8. No palco desconectado, avanca para proxima musica (Wave)
+    const stagePicker = page.locator("#stage-picker");
+    await expect(stagePicker).toHaveValue("0");
+    await page.click('[data-action="stage-next"]');
+    await expect(stagePicker).toHaveValue("1");
+    await expect(stageBadge).toBeVisible();
+
+    // Volta e transpoe no palco
+    await page.click('[data-action="stage-prev"]');
+    await expect(stagePicker).toHaveValue("0");
+    await expect(page.locator("h1.sheet-title")).toHaveText("Garota de Ipanema");
+
+    // Sai do palco mesmo offline
+    await page.click('[data-action="exit-stage"]');
+    await expect(page).toHaveURL(/#\/setlists\/setlist-1/);
+    await expect(page.locator("#setlist-offline-badge")).toBeVisible();
+
+    // Restaura conexao
+    await page.context().setOffline(false);
+
+    const appErrors = errors.filter((err) => !err.includes("ERR_INTERNET_DISCONNECTED"));
+    expect(appErrors, "Nenhum erro inesperado da aplicação no console").toEqual([]);
+  });
 });

@@ -37,6 +37,7 @@ import {
   blankSong,
   clampTempo,
   findSong,
+  findPdfDocument,
   loadLibrary,
   measureCount,
   nextSectionLabel,
@@ -1111,6 +1112,23 @@ function viewSetlists() {
   </section>`;
 }
 
+
+function renderSetlistOfflineStatus(setlist) {
+  if (!setlist || !setlist.items.length) return "";
+  const allSongsReady = setlist.items.every((item) => {
+    const song = findSong(state.library, item.songId);
+    if (!song) return false;
+    if (song.pdfName && song.pdfRef?.documentId) {
+      if (!findPdfDocument(state.library, song.pdfRef.documentId)) return false;
+    }
+    return true;
+  });
+  if (allSongsReady) {
+    return `<div class="offline-badge" id="setlist-offline-badge">✓ Músicas e partituras prontas para tocar offline</div>`;
+  }
+  return "";
+}
+
 function viewSetlist() {
   const setlist = findSetlist(state.route.id);
   if (!setlist) return missing("Essa setlist não está na biblioteca.", "#/setlists");
@@ -1138,6 +1156,7 @@ function viewSetlist() {
       <label class="field">Local<input data-collection="setlist-place" value="${esc(setlist.place)}" placeholder="Casa, ensaio, evento"></label>
     </div>
     <label class="field">Nota<textarea data-collection="setlist-note">${esc(setlist.note)}</textarea></label>
+    ${renderSetlistOfflineStatus(setlist)}
     <p class="meta">Arraste ☰ ou use as setas para mudar a ordem.</p>
     <div class="collection">${rows || empty("Essa setlist está vazia.", "Adicione as cifras na ordem em que vão ser tocadas.")}</div>
   </section>`;
@@ -1171,6 +1190,7 @@ function viewStage() {
   return `<section>
     <div class="stage-bar no-print">
       <button class="btn ghost" type="button" data-action="exit-stage">Sair do palco</button>
+      <span class="offline-indicator-stage" id="stage-offline-badge">✓ Palco offline</span>
       <select id="stage-picker" aria-label="Música da setlist">${options}</select>
       <div class="inline-actions">
         <button class="btn ghost" type="button" data-action="stage-prev"${canPrev ? "" : " disabled"}>Anterior</button>
@@ -2585,3 +2605,53 @@ function cssEscape(value) {
 }
 
 renderAll();
+
+function registerServiceWorker() {
+  if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker
+        .register("./sw.js")
+        .then((registration) => {
+          updateOfflineIndicator();
+          registration.addEventListener("updatefound", () => {
+            const installing = registration.installing;
+            if (!installing) return;
+            installing.addEventListener("statechange", () => {
+              if (installing.state === "installed" && navigator.serviceWorker.controller) {
+                toast("Caderno atualizado. Pronto para uso offline.");
+              }
+            });
+          });
+        })
+        .catch(() => {
+          // SW não suportado ou bloqueado no ambiente
+        });
+    });
+
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      updateOfflineIndicator();
+    });
+  }
+}
+
+function updateOfflineIndicator() {
+  const isControlled = Boolean(navigator.serviceWorker?.controller);
+  const pill = document.querySelector("#offline-pill");
+  if (pill) {
+    if (!navigator.onLine) {
+      pill.hidden = false;
+      pill.textContent = "Offline (Cache ativo)";
+      pill.classList.add("offline-now");
+    } else if (isControlled) {
+      pill.hidden = false;
+      pill.textContent = "✓ Pronto para uso offline";
+      pill.classList.remove("offline-now");
+    } else {
+      pill.hidden = true;
+    }
+  }
+}
+
+window.addEventListener("online", updateOfflineIndicator);
+window.addEventListener("offline", updateOfflineIndicator);
+registerServiceWorker();
