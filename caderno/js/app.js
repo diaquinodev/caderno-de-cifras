@@ -32,6 +32,12 @@ import {
   removePdfDocument,
   pdfRangeSize,
   relativeToPhysicalPage,
+  createPdfSplitDraft,
+  addSplitRange,
+  updateSplitRange,
+  removeSplitRange,
+  validateSplitDraft,
+  applyPdfSplitDraft,
 } from "./store.js";
 
 const main = document.querySelector("#main");
@@ -54,6 +60,7 @@ const state = {
   songRouteId: "",
   clean: false,
   confirm: null,
+  wizard: null,
 };
 
 const REPEAT_CYCLE = ["", "start", "end", "both"];
@@ -279,13 +286,32 @@ window.addEventListener("beforeprint", () => {
   clearSheetFit(document.querySelector(".paper.sheet"));
   fitGlyphs();
 });
+
+document.addEventListener("input", (event) => {
+  const target = event.target;
+  if (!state.wizard || !target.dataset.wizardInput) return;
+  const field = target.dataset.wizardInput;
+  const idx = Number(target.dataset.rangeIndex ?? 0);
+  const draft = state.wizard.draft;
+  if (field === "single-title") {
+    if (draft.ranges[0]) draft.ranges[0].title = target.value;
+  } else if (field === "range-title") {
+    updateSplitRange(draft, idx, { title: target.value });
+  } else if (field === "range-first") {
+    updateSplitRange(draft, idx, { firstPage: Number(target.value) });
+  } else if (field === "range-last") {
+    updateSplitRange(draft, idx, { lastPage: Number(target.value) });
+  }
+  updateWizardFeedback();
+});
+
 window.addEventListener("afterprint", () => fitPerformanceSheet());
 
 document.querySelector("#pdf-input")?.addEventListener("change", (event) => {
   const input = event.target;
   const file = input.files?.[0];
   input.value = "";
-  if (file) attachPdf(file);
+  if (file) startPdfSplitWizard(file);
 });
 
 document.querySelector("#audio-input")?.addEventListener("change", (event) => {
@@ -296,6 +322,101 @@ document.querySelector("#audio-input")?.addEventListener("change", (event) => {
 });
 
 const actions = {
+  "wizard-set-mode": (element) => {
+    if (!state.wizard) return;
+    const mode = element.dataset.mode || "single";
+    state.wizard.draft.mode = mode;
+    if (mode === "single") {
+      const firstTitle = state.wizard.draft.ranges[0]?.title || state.wizard.file.name.replace(/\.pdf$/i, "");
+      state.wizard.draft.ranges = [
+        {
+          id: uid(),
+          title: firstTitle,
+          firstPage: 1,
+          lastPage: state.wizard.draft.pageCount,
+        },
+      ];
+    }
+    renderPdfWizardModal();
+  },
+  "wizard-add-range": () => {
+    if (!state.wizard) return;
+    addSplitRange(state.wizard.draft);
+    renderPdfWizardModal();
+  },
+  "wizard-remove-range": (element) => {
+    if (!state.wizard) return;
+    const idx = Number(element.dataset.rangeIndex);
+    removeSplitRange(state.wizard.draft, idx);
+    renderPdfWizardModal();
+  },
+  "wizard-toggle-overlap": () => {
+    if (!state.wizard) return;
+    state.wizard.allowOverlap = !state.wizard.allowOverlap;
+    updateWizardFeedback();
+  },
+  "wizard-toggle-gaps": () => {
+    if (!state.wizard) return;
+    state.wizard.allowGaps = !state.wizard.allowGaps;
+    updateWizardFeedback();
+  },
+  "wizard-cancel": () => {
+    state.wizard = null;
+    closeModal();
+  },
+  "wizard-commit": async () => {
+    if (!state.wizard) return;
+    const { file, buffer, draft, targetSongId, allowOverlap, allowGaps } = state.wizard;
+    const validation = validateSplitDraft(draft);
+    if (!validation.valid) {
+      toast("Corrija os erros do assistente antes de concluir.");
+      return;
+    }
+    if (validation.hasOverlap && !allowOverlap) {
+      toast("Confirme a sobreposição de páginas para continuar.");
+      return;
+    }
+    if (validation.hasGaps && !allowGaps) {
+      toast("Confirme as páginas não atribuídas para continuar.");
+      return;
+    }
+
+    const targetSong = targetSongId ? findSong(state.library, targetSongId) : null;
+    const oldDocId = targetSong?.pdfRef?.documentId || (targetSong?.pdfName ? targetSong.id : null);
+
+    try {
+      await savePdfDocument(draft.documentId, {
+        name: file.name,
+        pageCount: draft.pageCount,
+        buffer,
+        createdAt: new Date().toISOString(),
+      });
+
+      const result = applyPdfSplitDraft(state.library, draft, {
+        allowOverlap,
+        allowGaps,
+        targetSongId,
+      });
+
+      if (oldDocId && countPdfDocumentReferences(state.library, oldDocId) === 0) {
+        removePdfDocument(state.library, oldDocId);
+        await deletePdfDocument(oldDocId).catch(() => {});
+        releasePdf(oldDocId);
+      }
+
+      persist(true);
+      state.wizard = null;
+      closeModal();
+
+      const firstSong = result.songs[0];
+      if (firstSong) go(`#/musicas/${firstSong.id}`);
+      else renderAll();
+
+      toast(`PDF importado — ${result.songs.length} música(s) configurada(s)`);
+    } catch {
+      toast("Não foi possível concluir a importação do PDF.");
+    }
+  },
   "new-song": () => {
     const song = blankSong();
     state.library.songs.unshift(song);
@@ -1638,7 +1759,181 @@ async function mountPdfFrame() {
   }
 }
 
-async function attachPdf(file) {
+async function startPdfSplitWizard(file) {
+  if (file.size > 25 * 1024 * 1024) {
+    toast("Esse PDF passa de 25 MB.");
+    return;
+  }
+  try {
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    const inspection = await inspectPdf(bytes);
+    if (!inspection.ok) {
+      toast(inspection.message || "Não foi possível abrir o arquivo PDF.");
+      return;
+    }
+    const pageCount = inspection.pageCount;
+    const song = currentSong();
+    const defaultTitle = song ? song.title : file.name.replace(/.pdf$/i, "");
+    state.wizard = {
+      file,
+      buffer,
+      draft: createPdfSplitDraft({
+        documentId: uid(),
+        fileName: file.name,
+        pageCount,
+        defaultTitle,
+      }),
+      targetSongId: song?.id || null,
+      allowOverlap: false,
+      allowGaps: false,
+    };
+    renderPdfWizardModal();
+  } catch {
+    toast("Não foi possível carregar o PDF selecionado.");
+  }
+}
+
+function renderPdfWizardModal() {
+  if (!state.wizard) return;
+  const { draft, allowOverlap, allowGaps } = state.wizard;
+  const isSingle = draft.mode === "single";
+  const singleTitle = draft.ranges[0]?.title || "";
+
+  const rangesHtml = draft.ranges.map((range, idx) => {
+    const rangeNum = idx + 1;
+    const removeBtn = draft.ranges.length > 1
+      ? '<button class="btn ghost danger" type="button" data-action="wizard-remove-range" data-range-index="' + idx + '" aria-label="Remover música #' + rangeNum + '">Excluir</button>'
+      : "";
+    return '<div class="wizard-range-row" data-range-index="' + idx + '">' +
+      '<span class="range-badge">M' + rangeNum + '</span>' +
+      '<input type="text" class="field range-title" value="' + esc(range.title) + '" data-wizard-input="range-title" data-range-index="' + idx + '" placeholder="Título da música #' + rangeNum + '" aria-label="Título da música #' + rangeNum + '">' +
+      '<div class="range-pages">' +
+        '<label>De: <input type="number" class="field page-num" min="1" max="' + draft.pageCount + '" value="' + range.firstPage + '" data-wizard-input="range-first" data-range-index="' + idx + '" aria-label="Página inicial música #' + rangeNum + '"></label>' +
+        '<label>Até: <input type="number" class="field page-num" min="1" max="' + draft.pageCount + '" value="' + range.lastPage + '" data-wizard-input="range-last" data-range-index="' + idx + '" aria-label="Página final música #' + rangeNum + '"></label>' +
+      '</div>' +
+      removeBtn +
+    '</div>';
+  }).join("");
+
+  const panelHtml = isSingle
+    ? '<div class="wizard-panel wizard-single-panel">' +
+        '<label class="wizard-field-label">Título da cifra: ' +
+          '<input type="text" class="field" value="' + esc(singleTitle) + '" data-wizard-input="single-title" placeholder="Nome da música">' +
+        '</label>' +
+        '<p class="meta">O arquivo inteiro (páginas 1 a ' + draft.pageCount + ') será vinculado a esta cifra.</p>' +
+      '</div>'
+    : '<div class="wizard-panel wizard-split-panel">' +
+        '<div class="wizard-range-list">' + rangesHtml + '</div>' +
+        '<div><button class="btn ghost" type="button" data-action="wizard-add-range">+ Adicionar música</button></div>' +
+      '</div>';
+
+  const gridHtml = renderWizardGridHtml(draft);
+  const messagesHtml = renderWizardMessagesHtml(draft, allowOverlap, allowGaps);
+  const validation = validateSplitDraft(draft);
+  const canCommit = validation.valid && (!validation.hasOverlap || allowOverlap) && (!validation.hasGaps || allowGaps);
+
+  const html = '<div class="modal wizard-modal" role="dialog" aria-modal="true" aria-labelledby="wizard-title" id="pdf-wizard-modal">' +
+    '<div class="wizard-header">' +
+      '<h2 id="wizard-title">Assistente de PDF</h2>' +
+      '<p class="meta"><strong>' + esc(draft.fileName) + '</strong> — ' + draft.pageCount + ' página(s)</p>' +
+    '</div>' +
+    '<div class="wizard-modes inline-actions">' +
+      '<button class="btn ' + (isSingle ? "primary" : "ghost") + '" type="button" data-action="wizard-set-mode" data-mode="single">Música única (arquivo inteiro)</button>' +
+      '<button class="btn ' + (!isSingle ? "primary" : "ghost") + '" type="button" data-action="wizard-set-mode" data-mode="split">Dividir em músicas (vários intervalos)</button>' +
+    '</div>' +
+    panelHtml +
+    '<div>' +
+      '<p class="meta" style="margin-bottom: 6px;"><strong>Mapa de páginas:</strong></p>' +
+      '<div class="wizard-page-grid" id="wizard-page-grid">' + gridHtml + '</div>' +
+    '</div>' +
+    '<div id="wizard-messages">' + messagesHtml + '</div>' +
+    '<div class="inline-actions wizard-footer">' +
+      '<button class="btn ghost" type="button" data-action="wizard-cancel">Cancelar</button>' +
+      '<button class="btn primary" type="button" data-action="wizard-commit" ' + (canCommit ? "" : "disabled") + '>Concluir importação</button>' +
+    '</div>' +
+  '</div>';
+
+  openModal(html);
+}
+
+function renderWizardGridHtml(draft) {
+  const pageCount = Math.max(1, Number(draft.pageCount) || 1);
+  const pageUsage = new Map();
+  draft.ranges.forEach((range, idx) => {
+    const rangeNum = idx + 1;
+    const first = Number(range.firstPage);
+    const last = Number(range.lastPage);
+    if (Number.isInteger(first) && Number.isInteger(last) && first <= last) {
+      for (let p = Math.max(1, first); p <= Math.min(pageCount, last); p += 1) {
+        if (!pageUsage.has(p)) pageUsage.set(p, []);
+        pageUsage.get(p).push(rangeNum);
+      }
+    }
+  });
+
+  const cards = [];
+  for (let p = 1; p <= pageCount; p += 1) {
+    const usages = pageUsage.get(p) || [];
+    let statusClass;
+    let ownerLabel;
+    if (usages.length === 0) {
+      statusClass = "page-gap";
+      ownerLabel = "—";
+    } else if (usages.length === 1) {
+      statusClass = "page-assigned";
+      ownerLabel = "M" + usages[0];
+    } else {
+      statusClass = "page-overlap";
+      ownerLabel = "M" + usages.join("+");
+    }
+    cards.push('<div class="page-card ' + statusClass + '" data-page="' + p + '">' +
+      '<span class="page-num">' + p + '</span>' +
+      '<span class="page-owner">' + ownerLabel + '</span>' +
+    '</div>');
+  }
+  return cards.join("");
+}
+
+function renderWizardMessagesHtml(draft, allowOverlap, allowGaps) {
+  const validation = validateSplitDraft(draft);
+  const parts = [];
+  if (!validation.valid) {
+    parts.push('<div class="wizard-callout error"><strong>Atenção:</strong><ul>' +
+      validation.errors.map((e) => "<li>" + esc(e) + "</li>").join("") +
+      '</ul></div>');
+  }
+  if (validation.hasOverlap) {
+    parts.push('<div class="wizard-callout warning"><label>' +
+      '<input type="checkbox" data-action="wizard-toggle-overlap" ' + (allowOverlap ? "checked" : "") + '> ' +
+      'Confirmar páginas sobrepostas em mais de uma música (' + validation.overlaps.join(", ") + ')' +
+      '</label></div>');
+  }
+  if (validation.hasGaps) {
+    parts.push('<div class="wizard-callout warning"><label>' +
+      '<input type="checkbox" data-action="wizard-toggle-gaps" ' + (allowGaps ? "checked" : "") + '> ' +
+      'Confirmar páginas não atribuídas a nenhuma música (' + validation.gaps.join(", ") + ')' +
+      '</label></div>');
+  }
+  return parts.join("");
+}
+
+function updateWizardFeedback() {
+  if (!state.wizard) return;
+  const { draft, allowOverlap, allowGaps } = state.wizard;
+  const gridEl = document.querySelector("#wizard-page-grid");
+  if (gridEl) gridEl.innerHTML = renderWizardGridHtml(draft);
+  const msgEl = document.querySelector("#wizard-messages");
+  if (msgEl) msgEl.innerHTML = renderWizardMessagesHtml(draft, allowOverlap, allowGaps);
+  const commitBtn = document.querySelector('[data-action="wizard-commit"]');
+  if (commitBtn) {
+    const validation = validateSplitDraft(draft);
+    const canCommit = validation.valid && (!validation.hasOverlap || allowOverlap) && (!validation.hasGaps || allowGaps);
+    commitBtn.disabled = !canCommit;
+  }
+}
+
+async function _attachPdf(file) {
   const song = currentSong();
   if (!song) return;
   if (file.size > 25 * 1024 * 1024) {
@@ -1735,6 +2030,7 @@ function openModal(html) {
 }
 
 function closeModal() {
+  if (state.wizard) state.wizard = null;
   modalRoot.innerHTML = "";
 }
 

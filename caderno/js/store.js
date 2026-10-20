@@ -378,7 +378,14 @@ export function removePdfDocument(library, documentId) {
   library.pdfDocuments = library.pdfDocuments.filter((doc) => doc.id !== documentId);
 }
 
-export function createPdfSplitDraft({ documentId, fileName, pageCount, defaultTitle = "" }) {
+/**
+ * @param {Object} options
+ * @param {string} [options.documentId]
+ * @param {string} [options.fileName]
+ * @param {number} options.pageCount
+ * @param {string} [options.defaultTitle]
+ */
+export function createPdfSplitDraft({ documentId = "", fileName = "", pageCount, defaultTitle = "" }) {
   const cleanName = String(fileName || "documento.pdf");
   const total = Math.max(1, Math.min(1000, Number(pageCount) || 1));
   const title = String(defaultTitle || cleanName.replace(/\.pdf$/i, "") || "Música sem título").slice(0, 160);
@@ -398,7 +405,14 @@ export function createPdfSplitDraft({ documentId, fileName, pageCount, defaultTi
   };
 }
 
-export function addSplitRange(draft, { title = "", firstPage, lastPage } = {}) {
+/**
+ * @param {any} draft
+ * @param {Object} [options]
+ * @param {string} [options.title]
+ * @param {number} [options.firstPage]
+ * @param {number} [options.lastPage]
+ */
+export function addSplitRange(draft, { title = "", firstPage = undefined, lastPage = undefined } = {}) {
   if (!draft || !Array.isArray(draft.ranges)) return;
   const lastRange = draft.ranges[draft.ranges.length - 1];
   const suggestedFirst = lastRange ? Math.min(draft.pageCount, lastRange.lastPage + 1) : 1;
