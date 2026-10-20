@@ -1,3 +1,4 @@
+import { requestCifraApi } from "./api.js";
 import {
   suggestChart,
   verifyDraftInvariants as verifyDraftInvariantsOriginal,
@@ -20,7 +21,7 @@ import {
 import { loadPdfDocument, savePdfDocument, deletePdfDocument } from "./files.js";
 import { createBackupV2, executeRestore } from "./backup.js";
 import { FORMS, findForm } from "./forms.js";
-import { chartFromCifraHtml, chartFromCifraPlain, pastedCifraLink } from "./cifra.js";
+import { chartFromCifraPlain, pastedCifraLink } from "./cifra.js";
 import { parseCifraSource, verifyCifraSourceInvariants } from "./source.js";
 import { ALL_SIX_FIXTURES } from "./fixtures/cifras.js";
 import { analyzeSamples } from "./listen.js";
@@ -1403,10 +1404,27 @@ function inspectSource() {
 }
 
 
-function openDraft() {
+async function openDraft() {
   const raw = document.querySelector("#paste-text")?.value || "";
   if (!raw.trim()) {
-    pasteError("Cole uma cifra antes de gerar o rascunho.");
+    pasteError("Cole uma cifra ou link antes de gerar o rascunho.");
+    return;
+  }
+  const trimmed = raw.trim();
+  if (/^https?:\/\//i.test(trimmed)) {
+    const link = pastedCifraLink(trimmed);
+    if (!link) {
+      pasteError("O endereço informado não é um link válido do Cifra Club.");
+      return;
+    }
+    toast("Consultando Cifra Club via API...");
+    const res = await requestCifraApi(link);
+    if (!res.ok) {
+      pasteError(res.error?.message || "Não consegui ler esse link.");
+      return;
+    }
+    state.currentDraft = suggestChart(res.source);
+    renderDraftModal();
     return;
   }
   try {
@@ -1594,47 +1612,15 @@ function pasteError(message) {
   toast(message);
 }
 
-async function chartFromLink(link) {
-  try {
-    const response = await fetch(`/api/cifra?url=${encodeURIComponent(link)}`);
-    const body = await response.json();
-    if (response.ok && body.sections?.length) return body;
-  } catch {
-    /* a leitura direta falhou; tenta a página pelo mesmo endereço */
-  }
-  const path = new URL(link).pathname.replace(/^\/+/, "");
-  const page = await fetch(`/leitura/${path}`, { headers: { Accept: "text/html" } });
-  if (!page.ok) return null;
-  const html = await page.text();
-  if (!html.includes("data-chord-name") || html.length > 1500000) return null;
-  const chart = chartFromCifraHtml(html);
-  return chart.sections.length ? chart : null;
-}
-
 async function applyCifraLink(song, link) {
-  if (chartHasChords(song)) {
-    const ok = await ask("Substituir os compassos desta cifra pela leitura do link?");
-    if (!ok) return;
+  toast("Consultando Cifra Club via API...");
+  const res = await requestCifraApi(link);
+  if (!res.ok) {
+    pasteError(res.error?.message || "Não consegui ler esse link.");
+    return;
   }
-  toast("Lendo a cifra…");
-  try {
-    const body = await chartFromLink(link);
-    if (!body) {
-      pasteError("Não consegui ler esse link. Copie a cifra na página e cole o texto aqui.");
-      return;
-    }
-    writeParsedChart(song, body, true);
-    const shared = await findSharedRecord(song.title, song.composer);
-    if (shared && await ask(`Há uma cifra já corrigida de “${shared.title}”. Usar a versão aprovada?`)) {
-      writeParsedChart(song, shared, true);
-      toast("Cifra aprovada do acervo.");
-      return;
-    }
-    const bars = body.sections.reduce((sum, section) => sum + section.measures.length, 0);
-    toast(`Cifra com ${bars} compassos. Confira a repetição.`);
-  } catch {
-    pasteError("Não consegui ler esse link. Copie a cifra na página e cole o texto aqui.");
-  }
+  state.currentDraft = suggestChart(res.source);
+  renderDraftModal();
 }
 
 async function applyPaste() {

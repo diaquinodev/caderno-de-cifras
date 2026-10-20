@@ -1053,4 +1053,90 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
 
     expect(errors).toEqual([]);
   });
+  test("fase 9: API de cifra - fronteira tipada, tratamento de bloqueio e importacao deterministica", async ({ page }) => {
+    const errors = await setupPage(page, { seedPdf: false });
+    await gotoRoute(page, "#/musicas");
+
+    // Intercepta e simula as respostas da API oficial /api/cifra
+    await page.route("**/api/cifra?url=*bloqueada*", async (route) => {
+      await route.fulfill({
+        status: 403,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: {
+            code: "UPSTREAM_BLOCKED",
+            message: "O Cifra Club bloqueou ou limitou o acesso automatizado a esta página. Copie e cole os acordes da cifra manualmente.",
+            retryable: false,
+          },
+        }),
+      });
+    });
+
+    await page.route("**/api/cifra?url=*mock-sucesso*", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          source: {
+            metadata: {
+              title: "Cifra Importada da API",
+              artist: "Artista Teste",
+              composer: "Compositor Teste",
+              key: "G",
+              url: "https://www.cifraclub.com.br/artista/mock-sucesso/",
+            },
+            blocks: [
+              {
+                id: "b-1",
+                label: "Intro",
+                kind: "section",
+                lines: [
+                  {
+                    type: "chords",
+                    raw: "| G | C |",
+                    chords: [
+                      { raw: "G", normalized: "G" },
+                      { raw: "C", normalized: "C" },
+                    ],
+                  },
+                ],
+              },
+            ],
+            allChords: [
+              { raw: "G", normalized: "G" },
+              { raw: "C", normalized: "C" },
+            ],
+            exclusions: [],
+          },
+        }),
+      });
+    });
+
+    // 1. Testa rejeicao de link que nao e do Cifra Club
+    await page.click('[data-action="new-song"]');
+    await page.click('[data-action="open-paste"]');
+    await page.fill("#paste-text", "https://www.google.com/search?q=cifra");
+    await page.click('[data-action="open-draft"]');
+    await expect(page.locator("#paste-error")).toBeVisible();
+    await expect(page.locator("#paste-error")).toContainText("não é um link válido do Cifra Club");
+
+    // 2. Testa link do Cifra Club bloqueado (UPSTREAM_BLOCKED)
+    await page.fill("#paste-text", "https://www.cifraclub.com.br/artista/bloqueada/");
+    await page.click('[data-action="open-draft"]');
+    await expect(page.locator("#paste-error")).toContainText("O Cifra Club bloqueou ou limitou o acesso");
+
+    // 3. Testa link com retorno valido de source via API oficial
+    await page.fill("#paste-text", "https://www.cifraclub.com.br/artista/mock-sucesso/");
+    await page.click('[data-action="open-draft"]');
+    await expect(page.locator("#draft-title")).toBeVisible();
+    await expect(page.locator(".modal")).toContainText("Cifra Importada da API");
+    await expect(page.locator(".modal")).toContainText("Tom: G");
+
+    // Fecha o modal
+    await page.click('.modal [data-action="draft-cancel"]');
+    await expect(page.locator("#draft-title")).not.toBeVisible();
+
+    const cleanErrors = errors.filter((e) => !e.includes("403 (Forbidden)"));
+    expect(cleanErrors).toEqual([]);
+  });
 });
