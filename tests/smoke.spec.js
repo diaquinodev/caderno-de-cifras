@@ -769,4 +769,172 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     expect(errors).toEqual([]);
   });
 
+  test("fase 6: exportar, limpar, importar e tocar as cinco musicas do PDF nos mesmos intervalos", async ({ page }) => {
+    const docId = "doc-album-5";
+    const fiveSongsLibrary = {
+      version: 2,
+      pdfDocuments: [{ id: docId, name: "album-5.pdf", pageCount: 12 }],
+      songs: [
+        {
+          id: "song-1",
+          title: "Faixa 1",
+          pdfRef: { documentId: docId, firstPage: 1, lastPage: 2 },
+          pdfName: "album-5.pdf",
+          pdfPages: 2,
+          sections: [{ id: "s-1", label: "A", measures: [{ id: "m-1", chords: "C" }] }],
+        },
+        {
+          id: "song-2",
+          title: "Faixa 2",
+          pdfRef: { documentId: docId, firstPage: 3, lastPage: 5 },
+          pdfName: "album-5.pdf",
+          pdfPages: 3,
+          sections: [{ id: "s-2", label: "A", measures: [{ id: "m-2", chords: "D" }] }],
+        },
+        {
+          id: "song-3",
+          title: "Faixa 3",
+          pdfRef: { documentId: docId, firstPage: 6, lastPage: 7 },
+          pdfName: "album-5.pdf",
+          pdfPages: 2,
+          sections: [{ id: "s-3", label: "A", measures: [{ id: "m-3", chords: "E" }] }],
+        },
+        {
+          id: "song-4",
+          title: "Faixa 4",
+          pdfRef: { documentId: docId, firstPage: 8, lastPage: 10 },
+          pdfName: "album-5.pdf",
+          pdfPages: 3,
+          sections: [{ id: "s-4", label: "A", measures: [{ id: "m-4", chords: "F" }] }],
+        },
+        {
+          id: "song-5",
+          title: "Faixa 5",
+          pdfRef: { documentId: docId, firstPage: 11, lastPage: 12 },
+          pdfName: "album-5.pdf",
+          pdfPages: 2,
+          sections: [{ id: "s-5", label: "A", measures: [{ id: "m-5", chords: "G" }] }],
+        },
+      ],
+      playlists: [],
+      setlists: [
+        {
+          id: "setlist-album-5",
+          name: "Setlist das 5 Faixas",
+          items: [
+            { songId: "song-1" },
+            { songId: "song-2" },
+            { songId: "song-3" },
+            { songId: "song-4" },
+            { songId: "song-5" },
+          ],
+        },
+      ],
+    };
+
+    const errors = await setupPage(page, {
+      library: fiveSongsLibrary,
+      seedPdf: false,
+      customPdfs: [{ id: docId, name: "album-5.pdf", pageCount: 12, base64: TWELVE_PAGE_PDF_BASE64 }],
+    });
+
+    await gotoRoute(page, "#/musicas");
+
+    // 1. Exporta o backup via UI
+    const downloadPromise = page.waitForEvent("download");
+    await page.click('button[data-action="export"]');
+    const download = await downloadPromise;
+    const downloadStream = await download.createReadStream();
+    const chunks = [];
+    for await (const chunk of downloadStream) chunks.push(chunk);
+    const backupJsonText = Buffer.concat(chunks).toString("utf8");
+    const backupData = JSON.parse(backupJsonText);
+
+    // Valida que o JSON tem BackupV2 com uma unica ocorrencia dos bytes do PDF
+    expect(backupData.version).toBe(2);
+    expect(backupData.pdfDocuments.length).toBe(1);
+    expect(backupData.pdfDocuments[0].id).toBe(docId);
+    const occurrences = backupJsonText.split(backupData.pdfDocuments[0].data).length - 1;
+    expect(occurrences).toBe(1);
+
+    // 2. Limpa toda a biblioteca e IndexedDB no navegador
+    await page.evaluate(async () => {
+      localStorage.clear();
+      const dbs = (await window.indexedDB.databases?.()) || [];
+      for (const db of dbs) {
+        if (db.name) window.indexedDB.deleteDatabase(db.name);
+      }
+    });
+
+    // Recarrega pagina em branco
+    await page.reload();
+    await page.waitForLoadState("domcontentloaded");
+    await expect(page.locator("h1")).toBeVisible();
+
+    // 3. Importa o backup exportado via modal de importacao (Substituir tudo)
+    await page.click('button[data-action="import"]');
+    const importModal = page.locator("#import-title");
+    await expect(importModal).toBeVisible();
+
+    await page.setInputFiles("#import-file", {
+      name: "caderno-biblioteca.json",
+      mimeType: "application/json",
+      buffer: Buffer.from(backupJsonText, "utf8"),
+    });
+
+    // Clica em "Substituir tudo" e confirma modal
+    await page.click('[data-action="replace-import"]');
+    const confirmBtn = page.locator('[data-action="confirm-yes"]');
+    await expect(confirmBtn).toBeVisible();
+    await confirmBtn.click();
+
+    // Espera toast de sucesso
+    await expect(page.locator("#toast")).toContainText("Biblioteca substituída");
+
+    // 4. Vai para o palco da setlist e toca as cinco musicas nos mesmos intervalos
+    await gotoRoute(page, "#/setlists/setlist-album-5/palco");
+
+    // Faixa 1 (paginas 1 e 2 do PDF)
+    await expect(page.locator("#stage-picker")).toHaveValue("0");
+    await expect(page.locator(".pdf-caption")).toContainText("Faixa 1");
+    await expect(page.locator(".pdf-caption")).toContainText("página 1 de 2");
+    await expect(page.locator("canvas.pdf-canvas")).toHaveAttribute("data-physical-page", "1");
+
+    await page.click('[data-action="stage-next"]');
+    await expect(page.locator(".pdf-caption")).toContainText("Faixa 1");
+    await expect(page.locator(".pdf-caption")).toContainText("página 2 de 2");
+    await expect(page.locator("canvas.pdf-canvas")).toHaveAttribute("data-physical-page", "2");
+
+    // Avanca para Faixa 2 (paginas 3, 4 e 5 do PDF -> 1/3, 2/3, 3/3)
+    await page.click('[data-action="stage-next"]');
+    await expect(page.locator("#stage-picker")).toHaveValue("1");
+    await expect(page.locator(".pdf-caption")).toContainText("Faixa 2");
+    await expect(page.locator(".pdf-caption")).toContainText("página 1 de 3");
+    await expect(page.locator("canvas.pdf-canvas")).toHaveAttribute("data-physical-page", "3");
+
+    await page.click('[data-action="stage-next"]');
+    await expect(page.locator(".pdf-caption")).toContainText("Faixa 2");
+    await expect(page.locator(".pdf-caption")).toContainText("página 2 de 3");
+    await expect(page.locator("canvas.pdf-canvas")).toHaveAttribute("data-physical-page", "4");
+
+    await page.click('[data-action="stage-next"]');
+    await expect(page.locator(".pdf-caption")).toContainText("Faixa 2");
+    await expect(page.locator(".pdf-caption")).toContainText("página 3 de 3");
+    await expect(page.locator("canvas.pdf-canvas")).toHaveAttribute("data-physical-page", "5");
+
+    // Avanca para Faixa 3
+    await page.click('[data-action="stage-next"]');
+    await expect(page.locator("#stage-picker")).toHaveValue("2");
+    await expect(page.locator(".pdf-caption")).toContainText("Faixa 3");
+    await expect(page.locator(".pdf-caption")).toContainText("página 1 de 2");
+    await expect(page.locator("canvas.pdf-canvas")).toHaveAttribute("data-physical-page", "6");
+
+    // Volta para Faixa 2 -> deve cair na ultima pagina (3 de 3, pagina fisica 5)
+    await page.click('[data-action="stage-prev"]');
+    await expect(page.locator("#stage-picker")).toHaveValue("1");
+    await expect(page.locator(".pdf-caption")).toContainText("Faixa 2");
+    await expect(page.locator(".pdf-caption")).toContainText("página 3 de 3");
+    await expect(page.locator("canvas.pdf-canvas")).toHaveAttribute("data-physical-page", "5");
+    expect(errors).toEqual([]);
+  });
 });
