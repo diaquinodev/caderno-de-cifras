@@ -984,4 +984,73 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
 
     expect(errors).toEqual([]);
   });
+  test("fase 8: fluxo interativo do rascunho musical - aviso de compasso, divisao, cancelamento e confirmacao", async ({ page }) => {
+    const errors = await setupPage(page, { seedPdf: false });
+    await gotoRoute(page, "#/musicas");
+
+    const initialSongs = await page.locator("#list button[data-action='open-song'], #list a").count();
+
+    // 1. Abre modal de colar cifra
+    await page.click('[data-action="new-song"]');
+    await page.click('[data-action="open-paste"]');
+    await expect(page.locator("#paste-title")).toBeVisible();
+
+    // 2. Carrega fixture "So Easy"
+    await page.click('[data-action="load-fixture"][data-fixture-id="so-easy"]');
+
+    // 3. Clica em "Gerar rascunho"
+    await page.click('[data-action="open-draft"]');
+    await expect(page.locator("#draft-title")).toBeVisible();
+    await expect(page.locator("#draft-title")).toContainText("Rascunho Musical");
+
+    // 4. Valida aviso de timeSignature ausente
+    const timeSigBanner = page.locator("#draft-time-sig-banner");
+    await expect(timeSigBanner).toBeVisible();
+    await expect(timeSigBanner).toContainText("Fórmula de compasso não definida");
+
+    // 5. Define timeSignature 4/4
+    await page.click('[data-action="draft-set-timesig"][data-timesig="4/4"]');
+    await expect(page.locator("#selected-timesig")).toHaveText("4/4");
+
+    // 6. Testa cancelamento: fecha sem salvar
+    const cancelBtn = page.locator('.modal [data-action="draft-cancel"]');
+    await cancelBtn.scrollIntoViewIfNeeded();
+    await cancelBtn.click();
+    await expect(page.locator("#draft-title")).not.toBeVisible();
+
+    // Retorna a lista e confirma que nenhuma musica foi criada
+    await gotoRoute(page, "#/musicas");
+    const afterCancelSongs = await page.locator("#list button[data-action='open-song'], #list a").count();
+    expect(afterCancelSongs).toBe(initialSongs);
+
+    // 7. Agora repete o fluxo e confirma a criacao
+    await page.click('[data-action="new-song"]');
+    await page.click('[data-action="open-paste"]');
+    await page.click('[data-action="load-fixture"][data-fixture-id="so-easy"]');
+    await page.click('[data-action="open-draft"]');
+    await expect(page.locator("#draft-title")).toBeVisible();
+
+    // Define 4/4
+    await page.click('[data-action="draft-set-timesig"][data-timesig="4/4"]');
+
+    // Clica em dividir o primeiro compasso elegivel
+    const splitBtn = page.locator('[data-action="draft-split-measure"]').first();
+    if (await splitBtn.isVisible()) {
+      await splitBtn.click();
+    }
+
+    // Clica em confirmar rascunho
+    const confirmBtn = page.locator('.modal [data-action="draft-confirm"]');
+    await confirmBtn.scrollIntoViewIfNeeded();
+    await confirmBtn.click();
+    await expect(page.locator("#draft-title")).not.toBeVisible();
+
+    // Confirma que a musica foi salva e exibe compassos
+    await expect(page.locator("input.sheet-title")).toHaveValue(/So Easy/);
+    await expect(page.locator("#paper-body")).toBeVisible();
+    const finalBars = await page.locator("#paper-body .bar").count();
+    expect(finalBars).toBeGreaterThan(0);
+
+    expect(errors).toEqual([]);
+  });
 });
