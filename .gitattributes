@@ -1,0 +1,17 @@
+* text=auto
+
+*.css text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.mjs text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+*.pfb binary
+*.ttf binary
+
+# Preserve third-party distributions exactly, including their whitespace.
+caderno/vendor/** -whitespace

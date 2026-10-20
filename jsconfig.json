@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "lib": ["DOM", "DOM.Iterable", "ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "types": ["node"]
+  },
+  "files": [
+    "caderno/js/acervo.js",
+    "caderno/js/chords.js",
+    "caderno/js/cifra.js",
+    "caderno/js/forms.js",
+    "caderno/js/listen.js",
+    "caderno/js/store.js"
+  ]
+}

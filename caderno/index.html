@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Caderno</title>
+  <link rel="stylesheet" href="css/app.css?v=4">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">C</span>
+        <span>
+          <strong>Caderno</strong>
+          <small>Cifras, playlists e setlists</small>
+        </span>
+      </div>
+      <nav class="nav" aria-label="Seções">
+        <button type="button" data-nav="musicas">Músicas</button>
+        <button type="button" data-nav="playlists">Playlists</button>
+        <button type="button" data-nav="setlists">Setlists</button>
+      </nav>
+      <button id="create-btn" class="btn primary" type="button">Nova cifra</button>
+      <label class="search">
+        <span class="sr">Buscar</span>
+        <input id="search" type="search" placeholder="Buscar por nome, tom ou estilo" autocomplete="off">
+      </label>
+      <div id="list" class="list"></div>
+      <footer class="side-foot">
+        <p>Cifras, playlists e setlists ficam salvas neste navegador, inclusive no Netlify. Exporte um arquivo para levar a outra máquina.</p>
+        <div class="row">
+          <button type="button" data-action="export">Exportar</button>
+          <button type="button" data-action="import">Importar</button>
+        </div>
+      </footer>
+    </aside>
+    <main id="main"></main>
+  </div>
+  <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden>
+  <input id="audio-input" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac" hidden>
+  <div id="modal-root"></div>
+  <div id="toast" hidden></div>
+  <script type="module" src="js/app.js?v=4"></script>
+</body>
+</html>
