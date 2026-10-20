@@ -8,7 +8,8 @@ import {
   signedInterval,
   transposeSections,
 } from "./chords.js";
-import { loadPdfDocument, savePdfDocument, deletePdfDocument, bufferToBase64, base64ToBuffer } from "./files.js";
+import { loadPdfDocument, savePdfDocument, deletePdfDocument } from "./files.js";
+import { createBackupV2, executeRestore } from "./backup.js";
 import { FORMS, findForm } from "./forms.js";
 import { chartFromCifraHtml, chartFromCifraPlain, pastedCifraLink } from "./cifra.js";
 import { analyzeSamples } from "./listen.js";
@@ -25,7 +26,6 @@ import {
   loadLibrary,
   measureCount,
   nextSectionLabel,
-  normalizeLibrary,
   saveLibrary,
   uid,
   countPdfDocumentReferences,
@@ -1469,52 +1469,44 @@ async function readImport(mode) {
     const ok = await ask("Substituir toda a biblioteca deste navegador?");
     if (!ok) return;
   }
-  let incoming;
-  let pdfs;
+  let fileText;
   try {
-    const parsed = JSON.parse(await file.text());
-    pdfs = parsed?.pdfs && typeof parsed.pdfs === "object" ? parsed.pdfs : {};
-    incoming = normalizeLibrary(parsed);
+    fileText = await file.text();
+  } catch {
+    toast("Não foi possível ler o arquivo.");
+    return;
+  }
+
+  let result;
+  try {
+    result = await executeRestore(state.library, fileText, {
+      mode,
+      savePdfRecord: savePdfDocument,
+    });
   } catch {
     toast("Esse arquivo não é uma biblioteca do Caderno.");
     return;
   }
-  if (mode === "replace") state.library = incoming;
-  else state.library = mergeLibraries(state.library, incoming);
+
+  state.library = result.library;
   persist(true);
-  await restorePdfs(pdfs);
   closeModal();
   renderAll();
-  toast(mode === "replace" ? "Biblioteca substituída" : "Biblioteca mesclada");
-}
 
-function mergeLibraries(current, incoming) {
-  const songs = new Map(current.songs.map((song) => [song.id, song]));
-  for (const song of incoming.songs) songs.set(song.id, song);
-  const playlists = new Map(current.playlists.map((playlist) => [playlist.id, playlist]));
-  for (const playlist of incoming.playlists) playlists.set(playlist.id, playlist);
-  const setlists = new Map(current.setlists.map((setlist) => [setlist.id, setlist]));
-  for (const setlist of incoming.setlists) setlists.set(setlist.id, setlist);
-  return normalizeLibrary({ version: 1, songs: [...songs.values()], playlists: [...playlists.values()], setlists: [...setlists.values()] });
+  if (result.missing.length > 0) {
+    toast(
+      mode === "replace"
+        ? `Biblioteca substituída (${result.missing.length} partitura(s) não recuperadas)`
+        : `Biblioteca mesclada (${result.missing.length} partitura(s) não recuperadas)`
+    );
+  } else {
+    toast(mode === "replace" ? "Biblioteca substituída" : "Biblioteca mesclada");
+  }
 }
 
 async function exportLibrary() {
-  const pdfs = {};
-  for (const doc of state.library.pdfDocuments || []) {
-    const record = await loadPdfDocument(doc.id).catch(() => null);
-    if (!record?.buffer) continue;
-    pdfs[doc.id] = { name: doc.name, pageCount: doc.pageCount, pages: doc.pageCount, data: bufferToBase64(record.buffer) };
-  }
-  for (const song of state.library.songs) {
-    const docId = song.pdfRef?.documentId || (song.pdfName ? song.id : null);
-    if (docId && !pdfs[docId]) {
-      const record = await loadPdfDocument(docId).catch(() => null);
-      if (record?.buffer) {
-        pdfs[docId] = { name: record.name, pageCount: record.pageCount, pages: record.pageCount, data: bufferToBase64(record.buffer) };
-      }
-    }
-  }
-  const blob = new Blob([JSON.stringify({ ...state.library, pdfs }, null, 2)], { type: "application/json" });
+  const backup = await createBackupV2(state.library, loadPdfDocument);
+  const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
   const link = document.createElement("a");
   link.href = URL.createObjectURL(blob);
   link.download = "caderno-biblioteca.json";
@@ -1994,22 +1986,6 @@ async function _attachPdf(file) {
     renderAll();
   } catch {
     toast("Não foi possível guardar o PDF neste navegador.");
-  }
-}
-
-async function restorePdfs(pdfs) {
-  const entries = Object.entries(pdfs || {});
-  for (const [docId, pdf] of entries) {
-    if (!pdf?.data) continue;
-    try {
-      await savePdfDocument(docId, {
-        name: String(pdf.name || "cifra.pdf"),
-        pageCount: Number(pdf.pageCount ?? pdf.pages ?? 1),
-        buffer: base64ToBuffer(pdf.data),
-      });
-    } catch {
-      /* a damaged PDF in the backup does not block the rest of the library */
-    }
   }
 }
 
