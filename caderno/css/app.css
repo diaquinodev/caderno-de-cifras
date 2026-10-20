@@ -1204,3 +1204,164 @@ body.clean .pdf-read { height: 100dvh; }
   overflow-x: auto;
   white-space: pre;
 }
+
+/* ==========================================================================
+   Fase 10: Revisão Responsiva, Alvos de Toque e Leitura de Palco
+   ========================================================================== */
+
+/* Modal largo para split-view */
+.modal.modal-wide {
+  width: min(1140px, 96vw);
+  max-width: 1140px;
+}
+
+/* Alvos de toque adequados (mínimo de 44px - WCAG / Don Norman) */
+.draft-measure-box .btn,
+.draft-set-timesig,
+.draft-view-tabs .btn,
+.draft-footer-actions .btn {
+  min-height: 44px;
+  min-width: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+/* Layout responsivo do rascunho */
+.draft-review-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  margin: 14px 0;
+}
+
+/* Telas largas (notebook e tablet horizontal: >= 1024px): lado a lado */
+@media (min-width: 1024px) {
+  .draft-review-layout {
+    grid-template-columns: 1fr 1.3fr;
+    align-items: start;
+  }
+  .draft-view-tabs {
+    display: none !important;
+  }
+  .draft-source-column,
+  .draft-chart-column {
+    display: block !important;
+  }
+}
+
+/* Telas menores (< 1024px): alternância por abas */
+@media (max-width: 1023px) {
+  .draft-view-tabs {
+    display: flex;
+    gap: 8px;
+    margin: 10px 0 14px;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: 8px;
+  }
+  .draft-view-tabs .btn {
+    flex: 1;
+  }
+  .draft-review-layout.show-chart-tab .draft-source-column {
+    display: none !important;
+  }
+  .draft-review-layout.show-chart-tab .draft-chart-column {
+    display: block !important;
+  }
+  .draft-review-layout.show-source-tab .draft-source-column {
+    display: block !important;
+  }
+  .draft-review-layout.show-source-tab .draft-chart-column {
+    display: none !important;
+  }
+}
+
+.draft-source-column {
+  background: rgba(16, 11, 8, 0.02);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 12px 14px;
+  max-height: 550px;
+  overflow-y: auto;
+}
+
+.draft-source-column h3 {
+  font-size: 15px;
+  margin: 0 0 8px;
+  font-family: var(--sans);
+}
+
+.draft-chart-column {
+  max-height: 600px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+/* Banner de erro de validação (ex: falta de timeSignature) */
+.draft-error-banner {
+  background: #fff1f0;
+  border: 1px solid #ffa39e;
+  border-radius: 4px;
+  padding: 10px 14px;
+  margin: 10px 0;
+  color: #cf1322;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.draft-warning-banner.pulse-error {
+  border: 2px solid #cf1322;
+  background: #fff1f0;
+  color: #cf1322;
+  animation: pulse-border 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes pulse-border {
+  from { box-shadow: 0 0 0 0 rgba(207, 19, 34, 0.4); }
+  to { box-shadow: 0 0 0 6px rgba(207, 19, 34, 0); }
+}
+
+/* Compassos com ritmo visual refinado (inspiração iReal Pro) */
+.draft-measure-box {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ink);
+  border-radius: 2px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  min-height: 68px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.draft-measure-box .measure-chords {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+
+.draft-measure-box .measure-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.draft-measure-box .measure-actions button {
+  min-height: 32px;
+  min-width: 32px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+/* Política de leitura de palco para cifras longas */
+body.stage #stage-paper {
+  max-height: calc(100dvh - 75px);
+  overflow-y: auto;
+}

@@ -11,6 +11,7 @@ import {
   splitSection,
   mergeSections,
   convertDraftToSong,
+  validateDraftForConfirmation,
 } from "./draft.js";
 import { parseCifraSource } from "./source.js";
 import { ALL_SIX_FIXTURES } from "./fixtures/cifras.js";
@@ -235,4 +236,29 @@ e|---5---|
   assert.ok(song.notes.includes("[Tablatura - Tab - Intro]"));
   assert.ok(song.notes.includes("e|---5---|"));
   assert.ok(song.sourceSnapshot !== null, "Deve reter o snapshot da fonte");
+});
+
+test("validateDraftForConfirmation: recusa rascunho sem fórmula de compasso e sem título", () => {
+  const source = parseCifraSource(`[A]
+| C | G |`);
+  const draft = suggestChart(source);
+  // Por padrão timeSignature é vazio
+  const res1 = validateDraftForConfirmation(draft);
+  assert.equal(res1.valid, false);
+  assert.ok(res1.errors.some((e) => e.includes("fórmula de compasso")));
+
+  // Sem título
+  const noTitleDraft = { ...draft, timeSignature: "4/4", title: "" };
+  const res2 = validateDraftForConfirmation(noTitleDraft);
+  assert.equal(res2.valid, false);
+  assert.ok(res2.errors.some((e) => e.includes("título")));
+});
+
+test("validateDraftForConfirmation: aceita rascunho com fórmula de compasso e título válidos", () => {
+  const source = parseCifraSource(`Tom: D\n[A]\n| D | A |`);
+  const draft = suggestChart(source);
+  const updated = updateDraftTimeSignature(draft, "4/4");
+  const res = validateDraftForConfirmation(updated);
+  assert.equal(res.valid, true);
+  assert.equal(res.errors.length, 0);
 });
