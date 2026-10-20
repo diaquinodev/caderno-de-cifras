@@ -4,6 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Caderno</title>
+  <meta name="theme-color" content="#100b08">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Caderno">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="icon.svg">
+  <link rel="apple-touch-icon" href="icon-192.png">
   <link rel="stylesheet" href="css/app.css?v=4">
 </head>
 <body>
@@ -33,6 +40,7 @@
           <button type="button" data-action="export">Exportar</button>
           <button type="button" data-action="import">Importar</button>
         </div>
+        <span class="offline-pill" id="offline-pill" hidden>✓ Pronto para uso offline</span>
       </footer>
     </aside>
     <main id="main"></main>

@@ -12,3 +12,29 @@ directory = "netlify/functions"
 from = "/api/acervo"
 to = "/.netlify/functions/acervo"
 status = 200
+
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json; charset=utf-8"
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/api/*"
+  [headers.values]
+    Cache-Control = "no-store, no-cache, must-revalidate"
+
+[[headers]]
+  for = "/vendor/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

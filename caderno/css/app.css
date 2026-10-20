@@ -1365,3 +1365,48 @@ body.stage #stage-paper {
   max-height: calc(100dvh - 75px);
   overflow-y: auto;
 }
+
+/* ==========================================================================
+   Fase 11: PWA e Modo Offline
+   ========================================================================== */
+
+.offline-pill.offline-now {
+  background: rgba(250, 173, 20, 0.15);
+  color: #d46b08;
+  border-color: #ffd591;
+}
+
+.offline-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(82, 196, 26, 0.15);
+  color: #237804;
+  border: 1px solid #b7eb8f;
+  border-radius: 12px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-top: 8px;
+}
+
+.offline-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #f6ffed;
+  border: 1px solid #b7eb8f;
+  color: #389e0d;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 10px 0;
+}
+
+.offline-indicator-stage {
+  color: #52c41a;
+  font-size: 12px;
+  font-weight: bold;
+  margin-left: 8px;
+}
