@@ -3,6 +3,7 @@ import path from "node:path";
 import { test, expect } from "@playwright/test";
 import { VIEWPORT_CASES } from "./fixtures/library.js";
 import { setupPage, gotoRoute } from "./helpers.js";
+import { TWELVE_PAGE_PDF_BASE64 } from "./fixtures/pdf.js";
 
 const screenshotDir = path.resolve("tests", "screenshots");
 if (!fs.existsSync(screenshotDir)) {
@@ -69,6 +70,31 @@ test.describe("Caderno de Cifras - Provas Visuais Responsivas", () => {
           fullPage: false,
         });
 
+        expect(errors, "Nenhum erro de console").toEqual([]);
+      });
+
+      test("captura assistente de divisao de pdf", async ({ page }) => {
+        const errors = await setupPage(page);
+        await gotoRoute(page, "#/musicas/song-cifra-test");
+
+        const pdfBuffer = Buffer.from(TWELVE_PAGE_PDF_BASE64, "base64");
+        await page.setInputFiles("#pdf-input", {
+          name: "album-assistente.pdf",
+          mimeType: "application/pdf",
+          buffer: pdfBuffer,
+        });
+
+        const wizard = page.locator("#pdf-wizard-modal");
+        await expect(wizard).toBeVisible();
+        await page.click('[data-action="wizard-set-mode"][data-mode="split"]');
+        await page.click('[data-action="wizard-add-range"]');
+
+        await page.screenshot({
+          path: path.join(screenshotDir, `${vp.name}-wizard.png`),
+          fullPage: false,
+        });
+
+        await page.click('[data-action="wizard-cancel"]');
         expect(errors, "Nenhum erro de console").toEqual([]);
       });
     });

@@ -402,4 +402,188 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     await expect(status).toContainText("PDF não encontrado neste dispositivo");
   });
 
+  test("fase 4: cancelamento no assistente de divisao nao grava registros orfaos no IndexedDB", async ({ page }) => {
+    const errors = await setupPage(page, { seedPdf: false });
+    await gotoRoute(page, "#/musicas/song-cifra-test");
+
+    const countBefore = await getStoredPdfCount(page);
+    expect(countBefore).toBe(0);
+
+    const pdfBuffer = Buffer.from(TWELVE_PAGE_PDF_BASE64, "base64");
+    await page.setInputFiles("#pdf-input", {
+      name: "album-completo.pdf",
+      mimeType: "application/pdf",
+      buffer: pdfBuffer,
+    });
+
+    const wizardModal = page.locator("#pdf-wizard-modal");
+    await expect(wizardModal).toBeVisible();
+    await expect(wizardModal).toContainText("album-completo.pdf");
+    await expect(wizardModal).toContainText("12 página(s)");
+
+    const cards = page.locator("#wizard-page-grid .page-card");
+    await expect(cards).toHaveCount(12);
+
+    await page.click('[data-action="wizard-cancel"]');
+    await expect(wizardModal).not.toBeVisible();
+
+    const countAfterCancel = await getStoredPdfCount(page);
+    expect(countAfterCancel, "Cancelamento não deve gravar bytes no IndexedDB").toBe(0);
+
+    const songHasPdf = await page.evaluate(() => {
+      const raw = localStorage.getItem("caderno.library.v1");
+      const parsed = JSON.parse(raw || "{}");
+      const song = parsed.songs?.find((s) => s.id === "song-cifra-test");
+      return Boolean(song?.pdfRef || song?.pdfName);
+    });
+    expect(songHasPdf).toBe(false);
+
+    expect(errors).toEqual([]);
+  });
+
+  test("fase 4: divisao de PDF em cinco musicas contiguas (1-6, 7-8, 9-10, 11, 12)", async ({ page }) => {
+    const cleanLibrary = {
+      version: 2,
+      pdfDocuments: [],
+      songs: [
+        {
+          id: "song-cifra-test",
+          title: "Garota de Ipanema",
+          composer: "Tom Jobim",
+          key: "F",
+          tempo: 125,
+          timeSignature: "4/4",
+          sections: [{ id: "sec-a", label: "A", measures: [{ id: "m-1", chords: "F7M" }] }],
+        },
+      ],
+      playlists: [],
+      setlists: [],
+    };
+    const errors = await setupPage(page, { library: cleanLibrary, seedPdf: false });
+    await gotoRoute(page, "#/musicas/song-cifra-test");
+
+    const pdfBuffer = Buffer.from(TWELVE_PAGE_PDF_BASE64, "base64");
+    await page.setInputFiles("#pdf-input", {
+      name: "novo-caderno-2026.pdf",
+      mimeType: "application/pdf",
+      buffer: pdfBuffer,
+    });
+
+    const wizardModal = page.locator("#pdf-wizard-modal");
+    await expect(wizardModal).toBeVisible();
+
+    await page.click('[data-action="wizard-set-mode"][data-mode="split"]');
+
+    await page.fill('[data-wizard-input="range-title"][data-range-index="0"]', "Faixa 1 - Suíte");
+    await page.fill('[data-wizard-input="range-last"][data-range-index="0"]', "6");
+
+    await page.click('[data-action="wizard-add-range"]');
+    await page.fill('[data-wizard-input="range-title"][data-range-index="1"]', "Faixa 2 - Balada");
+    await page.fill('[data-wizard-input="range-first"][data-range-index="1"]', "7");
+    await page.fill('[data-wizard-input="range-last"][data-range-index="1"]', "8");
+
+    await page.click('[data-action="wizard-add-range"]');
+    await page.fill('[data-wizard-input="range-title"][data-range-index="2"]', "Faixa 3 - Choro");
+    await page.fill('[data-wizard-input="range-first"][data-range-index="2"]', "9");
+    await page.fill('[data-wizard-input="range-last"][data-range-index="2"]', "10");
+
+    await page.click('[data-action="wizard-add-range"]');
+    await page.fill('[data-wizard-input="range-title"][data-range-index="3"]', "Faixa 4 - Vinheta");
+    await page.fill('[data-wizard-input="range-first"][data-range-index="3"]', "11");
+    await page.fill('[data-wizard-input="range-last"][data-range-index="3"]', "11");
+
+    await page.click('[data-action="wizard-add-range"]');
+    await page.fill('[data-wizard-input="range-title"][data-range-index="4"]', "Faixa 5 - Encerramento");
+    await page.fill('[data-wizard-input="range-first"][data-range-index="4"]', "12");
+    await page.fill('[data-wizard-input="range-last"][data-range-index="4"]', "12");
+
+    const commitBtn = page.locator('[data-action="wizard-commit"]');
+    await expect(commitBtn).toBeEnabled();
+
+    await commitBtn.click();
+    await expect(wizardModal).not.toBeVisible();
+
+    const countInDb = await getStoredPdfCount(page);
+    expect(countInDb, "Deve haver exatamente 1 documento PDF compartilhado no IndexedDB").toBe(1);
+
+    const libState = await page.evaluate(() => {
+      const raw = localStorage.getItem("caderno.library.v1");
+      const parsed = JSON.parse(raw || "{}");
+      return {
+        docCount: parsed.pdfDocuments?.length || 0,
+        docId: parsed.pdfDocuments?.[0]?.id,
+        songs: parsed.songs?.map((s) => ({
+          title: s.title,
+          pdfName: s.pdfName,
+          pdfPages: s.pdfPages,
+          pdfRef: s.pdfRef,
+        })),
+      };
+    });
+
+    expect(libState.docCount, "1 documento registrado em pdfDocuments").toBe(1);
+    const docId = libState.docId;
+
+    const f1 = libState.songs.find((s) => s.title === "Faixa 1 - Suíte");
+    const f2 = libState.songs.find((s) => s.title === "Faixa 2 - Balada");
+    const f3 = libState.songs.find((s) => s.title === "Faixa 3 - Choro");
+    const f4 = libState.songs.find((s) => s.title === "Faixa 4 - Vinheta");
+    const f5 = libState.songs.find((s) => s.title === "Faixa 5 - Encerramento");
+
+    expect(f1?.pdfRef).toEqual({ documentId: docId, firstPage: 1, lastPage: 6 });
+    expect(f1?.pdfPages).toBe(6);
+
+    expect(f2?.pdfRef).toEqual({ documentId: docId, firstPage: 7, lastPage: 8 });
+    expect(f2?.pdfPages).toBe(2);
+
+    expect(f3?.pdfRef).toEqual({ documentId: docId, firstPage: 9, lastPage: 10 });
+    expect(f3?.pdfPages).toBe(2);
+
+    expect(f4?.pdfRef).toEqual({ documentId: docId, firstPage: 11, lastPage: 11 });
+    expect(f4?.pdfPages).toBe(1);
+
+    expect(f5?.pdfRef).toEqual({ documentId: docId, firstPage: 12, lastPage: 12 });
+    expect(f5?.pdfPages).toBe(1);
+
+    const totalPages = (f1?.pdfPages || 0) + (f2?.pdfPages || 0) + (f3?.pdfPages || 0) + (f4?.pdfPages || 0) + (f5?.pdfPages || 0);
+    expect(totalPages).toBe(12);
+
+    expect(errors).toEqual([]);
+  });
+
+  test("fase 4: sobreposicoes e lacunas bloqueiam conclusao ate confirmacao explicita", async ({ page }) => {
+    const errors = await setupPage(page, { seedPdf: false });
+    await gotoRoute(page, "#/musicas/song-cifra-test");
+
+    const pdfBuffer = Buffer.from(TWELVE_PAGE_PDF_BASE64, "base64");
+    await page.setInputFiles("#pdf-input", {
+      name: "partitura-gaps.pdf",
+      mimeType: "application/pdf",
+      buffer: pdfBuffer,
+    });
+
+    const wizardModal = page.locator("#pdf-wizard-modal");
+    await expect(wizardModal).toBeVisible();
+
+    await page.click('[data-action="wizard-set-mode"][data-mode="split"]');
+
+    await page.fill('[data-wizard-input="range-last"][data-range-index="0"]', "4");
+
+    await page.click('[data-action="wizard-add-range"]');
+    await page.fill('[data-wizard-input="range-first"][data-range-index="1"]', "3");
+    await page.fill('[data-wizard-input="range-last"][data-range-index="1"]', "6");
+
+    const commitBtn = page.locator('[data-action="wizard-commit"]');
+    await expect(commitBtn).toBeDisabled();
+
+    await page.click('[data-action="wizard-toggle-overlap"]');
+    await expect(commitBtn, "Ainda bloqueado por conta de lacunas").toBeDisabled();
+
+    await page.click('[data-action="wizard-toggle-gaps"]');
+    await expect(commitBtn, "Habilitado apos confirmar sobreposicoes e lacunas").toBeEnabled();
+
+    await page.click('[data-action="wizard-cancel"]');
+    expect(errors).toEqual([]);
+  });
+
 });

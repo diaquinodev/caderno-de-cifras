@@ -377,3 +377,201 @@ export function removePdfDocument(library, documentId) {
   if (!library || !Array.isArray(library.pdfDocuments) || !documentId) return;
   library.pdfDocuments = library.pdfDocuments.filter((doc) => doc.id !== documentId);
 }
+
+/**
+ * @param {Object} options
+ * @param {string} [options.documentId]
+ * @param {string} [options.fileName]
+ * @param {number} options.pageCount
+ * @param {string} [options.defaultTitle]
+ */
+export function createPdfSplitDraft({ documentId = "", fileName = "", pageCount, defaultTitle = "" }) {
+  const cleanName = String(fileName || "documento.pdf");
+  const total = Math.max(1, Math.min(1000, Number(pageCount) || 1));
+  const title = String(defaultTitle || cleanName.replace(/\.pdf$/i, "") || "Música sem título").slice(0, 160);
+  return {
+    documentId: String(documentId || uid()),
+    fileName: cleanName,
+    pageCount: total,
+    mode: "single",
+    ranges: [
+      {
+        id: uid(),
+        title,
+        firstPage: 1,
+        lastPage: total,
+      },
+    ],
+  };
+}
+
+/**
+ * @param {any} draft
+ * @param {Object} [options]
+ * @param {string} [options.title]
+ * @param {number} [options.firstPage]
+ * @param {number} [options.lastPage]
+ */
+export function addSplitRange(draft, { title = "", firstPage = undefined, lastPage = undefined } = {}) {
+  if (!draft || !Array.isArray(draft.ranges)) return;
+  const lastRange = draft.ranges[draft.ranges.length - 1];
+  const suggestedFirst = lastRange ? Math.min(draft.pageCount, lastRange.lastPage + 1) : 1;
+  const suggestedLast = Math.min(draft.pageCount, Math.max(suggestedFirst, suggestedFirst + 1));
+  const rangeTitle = String(title || ("Música " + (draft.ranges.length + 1))).slice(0, 160);
+  draft.ranges.push({
+    id: uid(),
+    title: rangeTitle,
+    firstPage: Number(firstPage ?? suggestedFirst),
+    lastPage: Number(lastPage ?? suggestedLast),
+  });
+}
+
+export function updateSplitRange(draft, index, changes = {}) {
+  if (!draft || !Array.isArray(draft.ranges) || !draft.ranges[index]) return;
+  const range = draft.ranges[index];
+  if (typeof changes.title === "string") range.title = changes.title.slice(0, 160);
+  if (changes.firstPage !== undefined) range.firstPage = Math.max(1, Math.min(draft.pageCount, Number(changes.firstPage) || 1));
+  if (changes.lastPage !== undefined) range.lastPage = Math.max(1, Math.min(draft.pageCount, Number(changes.lastPage) || 1));
+}
+
+export function removeSplitRange(draft, index) {
+  if (!draft || !Array.isArray(draft.ranges) || draft.ranges.length <= 1) return;
+  draft.ranges.splice(index, 1);
+}
+
+export function validateSplitDraft(draft) {
+  if (!draft || !Array.isArray(draft.ranges) || draft.ranges.length === 0) {
+    return {
+      valid: false,
+      errors: ["O assistente não possui intervalos definidos."],
+      hasOverlap: false,
+      overlaps: [],
+      hasGaps: false,
+      gaps: [],
+      warnings: [],
+    };
+  }
+
+  const errors = [];
+  const warnings = [];
+  const pageCount = Math.max(1, Number(draft.pageCount) || 1);
+  const pageUsage = new Map();
+
+  draft.ranges.forEach((range, idx) => {
+    const rangeNum = idx + 1;
+    const title = String(range?.title || "").trim();
+    if (!title) {
+      errors.push("Música #" + rangeNum + " precisa de um título.");
+    }
+    const first = Number(range?.firstPage);
+    const last = Number(range?.lastPage);
+    if (!Number.isInteger(first) || first < 1 || first > pageCount) {
+      errors.push("Música #" + rangeNum + ": página inicial (" + range?.firstPage + ") deve estar entre 1 e " + pageCount + ".");
+    }
+    if (!Number.isInteger(last) || last < 1 || last > pageCount) {
+      errors.push("Música #" + rangeNum + ": página final (" + range?.lastPage + ") deve estar entre 1 e " + pageCount + ".");
+    }
+    if (Number.isInteger(first) && Number.isInteger(last) && first > last) {
+      errors.push("Música #" + rangeNum + ": página inicial (" + first + ") não pode ser maior que a final (" + last + ").");
+    }
+    if (Number.isInteger(first) && Number.isInteger(last) && first <= last) {
+      for (let p = Math.max(1, first); p <= Math.min(pageCount, last); p += 1) {
+        if (!pageUsage.has(p)) pageUsage.set(p, []);
+        pageUsage.get(p).push(rangeNum);
+      }
+    }
+  });
+
+  const overlaps = [];
+  for (const [p, usages] of pageUsage.entries()) {
+    if (usages.length > 1) overlaps.push(p);
+  }
+  overlaps.sort((a, b) => a - b);
+  const hasOverlap = overlaps.length > 0;
+  if (hasOverlap) {
+    warnings.push("Páginas sobrepostas em múltiplos intervalos: " + overlaps.join(", ") + ".");
+  }
+
+  const gaps = [];
+  for (let p = 1; p <= pageCount; p += 1) {
+    if (!pageUsage.has(p)) gaps.push(p);
+  }
+  const hasGaps = gaps.length > 0;
+  if (hasGaps) {
+    warnings.push("Páginas do documento não atribuídas a nenhuma música: " + gaps.join(", ") + ".");
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    hasOverlap,
+    overlaps,
+    hasGaps,
+    gaps,
+    warnings,
+  };
+}
+
+export function applyPdfSplitDraft(library, draft, { allowOverlap = false, allowGaps = false, targetSongId = null } = {}) {
+  const validation = validateSplitDraft(draft);
+  if (!validation.valid) {
+    throw new Error("Draft inválido: " + validation.errors.join("; "));
+  }
+  if (validation.hasOverlap && !allowOverlap) {
+    throw new Error("Há sobreposição de páginas não confirmada (" + validation.overlaps.join(", ") + ")");
+  }
+  if (validation.hasGaps && !allowGaps) {
+    throw new Error("Há lacuna de páginas não confirmada (" + validation.gaps.join(", ") + ")");
+  }
+
+  if (!Array.isArray(library.pdfDocuments)) library.pdfDocuments = [];
+  if (!Array.isArray(library.songs)) library.songs = [];
+
+  const now = new Date().toISOString();
+  if (!library.pdfDocuments.some((d) => d.id === draft.documentId)) {
+    library.pdfDocuments.push({
+      id: draft.documentId,
+      name: draft.fileName,
+      pageCount: draft.pageCount,
+      createdAt: now,
+    });
+  }
+
+  const createdSongs = [];
+  let firstRangeUsed = false;
+  const targetSong = targetSongId ? library.songs.find((s) => s.id === targetSongId) : null;
+
+  for (let i = 0; i < draft.ranges.length; i += 1) {
+    const range = draft.ranges[i];
+    const rangePageCount = range.lastPage - range.firstPage + 1;
+    const pdfRef = {
+      documentId: draft.documentId,
+      firstPage: range.firstPage,
+      lastPage: range.lastPage,
+    };
+
+    if (targetSong && !firstRangeUsed && !targetSong.pdfRef && !targetSong.pdfName) {
+      targetSong.title = range.title || targetSong.title;
+      targetSong.pdfRef = pdfRef;
+      targetSong.pdfName = draft.fileName;
+      targetSong.pdfPages = rangePageCount;
+      targetSong.updatedAt = now;
+      createdSongs.push(targetSong);
+      firstRangeUsed = true;
+    } else {
+      const newSong = blankSong();
+      newSong.title = range.title;
+      newSong.pdfRef = pdfRef;
+      newSong.pdfName = draft.fileName;
+      newSong.pdfPages = rangePageCount;
+      newSong.createdAt = newSong.updatedAt = now;
+      library.songs.unshift(newSong);
+      createdSongs.push(newSong);
+    }
+  }
+
+  return {
+    documentId: draft.documentId,
+    songs: createdSongs,
+  };
+}
