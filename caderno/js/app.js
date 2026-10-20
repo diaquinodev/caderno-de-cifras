@@ -8,11 +8,11 @@ import {
   signedInterval,
   transposeSections,
 } from "./chords.js";
-import { copyPdf, deletePdf, loadPdf, savePdf, savePdfRecord, bufferToBase64, base64ToBuffer } from "./files.js";
+import { loadPdfDocument, savePdfDocument, deletePdfDocument, bufferToBase64, base64ToBuffer } from "./files.js";
 import { FORMS, findForm } from "./forms.js";
 import { chartFromCifraHtml, chartFromCifraPlain, pastedCifraLink } from "./cifra.js";
 import { analyzeSamples } from "./listen.js";
-import { paintPdf, releasePdf } from "./pdfview.js";
+import { inspectPdf, paintPdf, releasePdf } from "./pdfview.js";
 import {
   blankMeasure,
   blankPlaylist,
@@ -28,6 +28,10 @@ import {
   normalizeLibrary,
   saveLibrary,
   uid,
+  countPdfDocumentReferences,
+  removePdfDocument,
+  pdfRangeSize,
+  relativeToPhysicalPage,
 } from "./store.js";
 
 const main = document.querySelector("#main");
@@ -47,6 +51,7 @@ const state = {
   stagePage: 1,
   stageChart: false,
   stageRouteId: "",
+  songRouteId: "",
   clean: false,
   confirm: null,
 };
@@ -322,7 +327,13 @@ const actions = {
       setlist.items = setlist.items.filter((item) => item.songId !== song.id);
     }
     persist(true);
-    deletePdf(song.id).catch(() => {});
+    const docId = song.pdfRef?.documentId || (song.pdfName ? song.id : null);
+    if (docId && countPdfDocumentReferences(state.library, docId) === 0) {
+      removePdfDocument(state.library, docId);
+      deletePdfDocument(docId).catch(() => {});
+      releasePdf(docId);
+    }
+    persist(true);
     go("#/musicas");
   },
   "duplicate-song": (element) => {
@@ -338,7 +349,7 @@ const actions = {
     }
     state.library.songs.unshift(copy);
     persist(true);
-    if (song.pdfName) copyPdf(song.id, copy.id).catch(() => {});
+    if (song.pdfRef) copy.pdfRef = structuredClone(song.pdfRef);
     go(`#/musicas/${copy.id}`);
   },
   "delete-playlist": async (element) => {
@@ -543,11 +554,16 @@ const actions = {
   "remove-pdf": async () => {
     const song = currentSong();
     if (!song) return;
+    const docId = song.pdfRef?.documentId || (song.pdfName ? song.id : null);
     song.pdfName = "";
     song.pdfPages = 0;
-    releasePdf(song.id);
+    song.pdfRef = null;
     touchSong(song, true);
-    await deletePdf(song.id).catch(() => {});
+    if (docId && countPdfDocumentReferences(state.library, docId) === 0) {
+      removePdfDocument(state.library, docId);
+      await deletePdfDocument(docId).catch(() => {});
+      releasePdf(docId);
+    }
     renderAll();
   },
   export: () => exportLibrary(),
@@ -596,7 +612,18 @@ function renderAll() {
       state.stageChart = false;
       state.stagePage = 1;
     }
-  } else state.stageRouteId = "";
+  } else {
+    state.stageRouteId = "";
+  }
+  if (state.route.name === "song") {
+    if (state.songRouteId !== state.route.id) {
+      state.songRouteId = state.route.id;
+      state.clean = false;
+      state.stagePage = 1;
+    }
+  } else {
+    state.songRouteId = "";
+  }
   if (state.route.name !== "song" && state.route.name !== "stage") state.clean = false;
   document.body.classList.toggle("stage", state.route.name === "stage");
   document.body.classList.toggle("sheet", state.route.name === "song" || state.route.name === "stage");
@@ -1338,11 +1365,19 @@ function mergeLibraries(current, incoming) {
 
 async function exportLibrary() {
   const pdfs = {};
-  for (const song of state.library.songs) {
-    if (!song.pdfName) continue;
-    const record = await loadPdf(song.id).catch(() => null);
+  for (const doc of state.library.pdfDocuments || []) {
+    const record = await loadPdfDocument(doc.id).catch(() => null);
     if (!record?.buffer) continue;
-    pdfs[song.id] = { name: record.name, pages: record.pages, data: bufferToBase64(record.buffer) };
+    pdfs[doc.id] = { name: doc.name, pageCount: doc.pageCount, pages: doc.pageCount, data: bufferToBase64(record.buffer) };
+  }
+  for (const song of state.library.songs) {
+    const docId = song.pdfRef?.documentId || (song.pdfName ? song.id : null);
+    if (docId && !pdfs[docId]) {
+      const record = await loadPdfDocument(docId).catch(() => null);
+      if (record?.buffer) {
+        pdfs[docId] = { name: record.name, pageCount: record.pageCount, pages: record.pageCount, data: bufferToBase64(record.buffer) };
+      }
+    }
   }
   const blob = new Blob([JSON.stringify({ ...state.library, pdfs }, null, 2)], { type: "application/json" });
   const link = document.createElement("a");
@@ -1366,7 +1401,7 @@ function shiftStage(direction) {
 
 function stepPerformance(direction) {
   const song = currentSong();
-  const pages = song?.pdfPages || 0;
+  const pages = song?.pdfRef ? pdfRangeSize(song.pdfRef) : (song?.pdfPages || 0);
   if (pages > 1) {
     const nextPage = state.stagePage + direction;
     if (nextPage >= 1 && nextPage <= pages) {
@@ -1379,19 +1414,22 @@ function stepPerformance(direction) {
   const item = shiftStage(direction);
   if (!item) return;
   const arrived = findSong(state.library, item.songId);
-  state.stagePage = direction < 0 ? (arrived?.pdfPages || 1) : 1;
+  const arrivedPages = arrived?.pdfRef ? pdfRangeSize(arrived.pdfRef) : (arrived?.pdfPages || 1);
+  state.stagePage = direction < 0 ? arrivedPages : 1;
   renderMain();
 }
 
 function pdfStage(song, page) {
-  const pages = song.pdfPages || 1;
+  const pages = song.pdfRef ? pdfRangeSize(song.pdfRef) : (song.pdfPages || 1);
   const safePage = Math.min(Math.max(page || 1, 1), pages);
+  const physicalPage = song.pdfRef ? relativeToPhysicalPage(song.pdfRef, safePage) : safePage;
   const onStage = state.route.name === "stage";
   const setlist = onStage ? currentSetlist() : null;
   const canPrev = safePage > 1 || (onStage && state.stageIndex > 0);
   const canNext = safePage < pages || (onStage && setlist && state.stageIndex < setlist.items.length - 1);
+  const docId = song.pdfRef?.documentId || song.id;
   return `<div class="pdf-read">
-    <canvas class="pdf-canvas" data-song-id="${esc(song.id)}" data-page="${safePage}" aria-label="${esc(song.title)}, página ${safePage}"></canvas>
+    <canvas class="pdf-canvas" data-doc-id="${esc(docId)}" data-song-id="${esc(song.id)}" data-page="${safePage}" data-physical-page="${physicalPage}" aria-label="${esc(song.title)}, página ${safePage}"></canvas>
     <p class="pdf-status" hidden>Não consegui abrir o PDF desta cifra.</p>
     <div class="pdf-bar">
       <button class="btn ghost" type="button" data-action="toggle-clean">${readLabel(song)}</button>
@@ -1570,16 +1608,33 @@ function fitPerformanceSheet() {
 async function mountPdfFrame() {
   const canvas = document.querySelector(".pdf-canvas");
   if (!canvas) return;
-  const record = await loadPdf(canvas.dataset.songId).catch(() => null);
+  const docId = canvas.dataset.docId || canvas.dataset.songId;
   const status = canvas.parentElement?.querySelector(".pdf-status");
+  const record = await loadPdfDocument(docId).catch(() => null);
   if (!record?.buffer || !canvas.isConnected) {
-    if (status) status.hidden = false;
+    if (status) {
+      status.textContent = "PDF não encontrado neste dispositivo.";
+      status.hidden = false;
+    }
     return;
   }
+  const physicalPage = Number(canvas.dataset.physicalPage || canvas.dataset.page) || 1;
   try {
-    await paintPdf(canvas, canvas.dataset.songId, new Uint8Array(record.buffer), Number(canvas.dataset.page) || 1);
+    const res = await paintPdf(canvas, docId, new Uint8Array(record.buffer), physicalPage);
+    if (!res.ok) {
+      if (status && canvas.isConnected) {
+        status.textContent = res.message || "Não consegui abrir o PDF desta cifra.";
+        status.hidden = false;
+      }
+    } else {
+      if (status) status.hidden = true;
+      if (canvas.isConnected) canvas.dataset.rendered = "true";
+    }
   } catch {
-    if (status && canvas.isConnected) status.hidden = false;
+    if (status && canvas.isConnected) {
+      status.textContent = "Erro ao renderizar o PDF.";
+      status.hidden = false;
+    }
   }
 }
 
@@ -1591,12 +1646,44 @@ async function attachPdf(file) {
     return;
   }
   try {
-    const saved = await savePdf(song.id, file);
-    releasePdf(song.id);
-    song.pdfName = saved.name;
-    song.pdfPages = saved.pages;
+    const buffer = await file.arrayBuffer();
+    const bytes = new Uint8Array(buffer);
+    const inspection = await inspectPdf(bytes);
+    if (!inspection.ok) {
+      toast(inspection.message || "Não foi possível abrir o arquivo PDF.");
+      return;
+    }
+    const pageCount = inspection.pageCount;
+    const documentId = uid();
+    await savePdfDocument(documentId, {
+      name: file.name,
+      pageCount,
+      buffer,
+      createdAt: new Date().toISOString(),
+    });
+
+    const oldDocId = song.pdfRef?.documentId || (song.pdfName ? song.id : null);
+
+    if (!state.library.pdfDocuments) state.library.pdfDocuments = [];
+    state.library.pdfDocuments.push({
+      id: documentId,
+      name: file.name,
+      pageCount,
+      createdAt: new Date().toISOString(),
+    });
+
+    song.pdfRef = { documentId, firstPage: 1, lastPage: pageCount };
+    song.pdfName = file.name;
+    song.pdfPages = pageCount;
     touchSong(song, true);
-    toast(`PDF anexado · ${saved.pages} página(s)`);
+
+    if (oldDocId && countPdfDocumentReferences(state.library, oldDocId) === 0) {
+      removePdfDocument(state.library, oldDocId);
+      await deletePdfDocument(oldDocId).catch(() => {});
+      releasePdf(oldDocId);
+    }
+
+    toast(`PDF anexado — ${pageCount} página(s)`);
     renderAll();
   } catch {
     toast("Não foi possível guardar o PDF neste navegador.");
@@ -1605,12 +1692,12 @@ async function attachPdf(file) {
 
 async function restorePdfs(pdfs) {
   const entries = Object.entries(pdfs || {});
-  for (const [songId, pdf] of entries) {
-    if (!pdf?.data || !findSong(state.library, songId)) continue;
+  for (const [docId, pdf] of entries) {
+    if (!pdf?.data) continue;
     try {
-      await savePdfRecord(songId, {
+      await savePdfDocument(docId, {
         name: String(pdf.name || "cifra.pdf"),
-        pages: Number(pdf.pages) || 1,
+        pageCount: Number(pdf.pageCount ?? pdf.pages ?? 1),
         buffer: base64ToBuffer(pdf.data),
       });
     } catch {

@@ -24,50 +24,112 @@ export function countPdfPages(bytes) {
   return Math.max(1, Math.min(200, marks?.length || 1));
 }
 
-export async function savePdf(songId, file) {
-  const buffer = await file.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  const pages = countPdfPages(bytes);
+/**
+ * Salva um registro de PDF no IndexedDB por documentId.
+ *
+ * @param {string} documentId
+ * @param {{ name: string, pageCount?: number, pages?: number, buffer: ArrayBuffer, createdAt?: string }} record
+ */
+export async function savePdfDocument(documentId, record) {
+  if (!documentId || !record?.buffer) {
+    throw new Error("documentId e buffer sao obrigatorios para salvar PDF");
+  }
   const db = await openDb();
   const tx = db.transaction(STORE, "readwrite");
-  tx.objectStore(STORE).put({ name: file.name, pages, buffer }, songId);
+  const payload = {
+    name: String(record.name || "documento.pdf"),
+    pageCount: Number(record.pageCount ?? record.pages ?? 1),
+    buffer: record.buffer,
+    createdAt: record.createdAt || new Date().toISOString(),
+  };
+  tx.objectStore(STORE).put(payload, documentId);
   await done(tx);
   db.close();
-  return { name: file.name, pages };
+  return payload;
 }
 
-export async function savePdfRecord(songId, record) {
-  const db = await openDb();
-  const tx = db.transaction(STORE, "readwrite");
-  tx.objectStore(STORE).put(record, songId);
-  await done(tx);
-  db.close();
-}
-
-export async function loadPdf(songId) {
+/**
+ * Carrega um registro de PDF do IndexedDB por documentId.
+ *
+ * @param {string} documentId
+ * @returns {Promise<{ name: string, pageCount: number, buffer: ArrayBuffer, createdAt?: string } | null>}
+ */
+export async function loadPdfDocument(documentId) {
+  if (!documentId) return null;
   const db = await openDb();
   const tx = db.transaction(STORE, "readonly");
-  const request = tx.objectStore(STORE).get(songId);
+  const request = tx.objectStore(STORE).get(documentId);
   const record = await new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result || null);
     request.onerror = () => reject(request.error);
   });
   await done(tx);
   db.close();
-  return record;
+  if (!record) return null;
+  return {
+    name: String(record.name || "documento.pdf"),
+    pageCount: Number(record.pageCount ?? record.pages ?? 1),
+    buffer: record.buffer,
+    createdAt: record.createdAt || undefined,
+  };
+}
+
+/**
+ * Exclui um PDF do IndexedDB por documentId.
+ *
+ * @param {string} documentId
+ */
+export async function deletePdfDocument(documentId) {
+  if (!documentId) return;
+  const db = await openDb();
+  const tx = db.transaction(STORE, "readwrite");
+  tx.objectStore(STORE).delete(documentId);
+  await done(tx);
+  db.close();
+}
+
+/**
+ * Conta a quantidade de registros no armazenamento IndexedDB.
+ *
+ * @returns {Promise<number>}
+ */
+export async function countStoredPdfRecords() {
+  const db = await openDb();
+  const tx = db.transaction(STORE, "readonly");
+  const request = tx.objectStore(STORE).count();
+  const count = await new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  await done(tx);
+  db.close();
+  return count;
+}
+
+// Aliases para compatibilidade legada
+export async function savePdf(id, file) {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  const pages = countPdfPages(bytes);
+  await savePdfDocument(id, { name: file.name, pageCount: pages, buffer });
+  return { name: file.name, pages };
+}
+
+export async function savePdfRecord(id, record) {
+  return savePdfDocument(id, record);
+}
+
+export async function loadPdf(id) {
+  return loadPdfDocument(id);
 }
 
 export async function copyPdf(fromId, toId) {
-  const record = await loadPdf(fromId);
-  if (record) await savePdfRecord(toId, record);
+  const record = await loadPdfDocument(fromId);
+  if (record) await savePdfDocument(toId, record);
 }
 
-export async function deletePdf(songId) {
-  const db = await openDb();
-  const tx = db.transaction(STORE, "readwrite");
-  tx.objectStore(STORE).delete(songId);
-  await done(tx);
-  db.close();
+export async function deletePdf(id) {
+  return deletePdfDocument(id);
 }
 
 export function bufferToBase64(buffer) {

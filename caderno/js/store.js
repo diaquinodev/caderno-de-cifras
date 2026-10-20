@@ -352,3 +352,28 @@ export function nextSectionLabel(song) {
   }
   return `Seção ${song.sections.length + 1}`;
 }
+
+export function countPdfDocumentReferences(library, documentId) {
+  if (!library || !Array.isArray(library.songs) || !documentId) return 0;
+  let count = 0;
+  for (const song of library.songs) {
+    if (song?.pdfRef?.documentId === documentId) count += 1;
+  }
+  return count;
+}
+
+export function collectOrphanPdfDocuments(library) {
+  if (!library || !Array.isArray(library.pdfDocuments)) return [];
+  const referenced = new Set();
+  for (const song of library.songs || []) {
+    if (song?.pdfRef?.documentId) referenced.add(song.pdfRef.documentId);
+  }
+  return library.pdfDocuments
+    .filter((doc) => doc?.id && !referenced.has(doc.id))
+    .map((doc) => doc.id);
+}
+
+export function removePdfDocument(library, documentId) {
+  if (!library || !Array.isArray(library.pdfDocuments) || !documentId) return;
+  library.pdfDocuments = library.pdfDocuments.filter((doc) => doc.id !== documentId);
+}
