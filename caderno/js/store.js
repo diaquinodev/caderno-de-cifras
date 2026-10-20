@@ -575,3 +575,127 @@ export function applyPdfSplitDraft(library, draft, { allowOverlap = false, allow
     songs: createdSongs,
   };
 }
+
+
+/**
+ * Retorna a quantidade de páginas utilizáveis da música (1 para cifras de texto, ou tamanho do intervalo do PDF).
+ *
+ * @param {any} song
+ * @returns {number}
+ */
+export function getSongPageCount(song) {
+  if (!song) return 1;
+  if (song.pdfRef) return pdfRangeSize(song.pdfRef);
+  return Math.max(1, Number(song.pdfPages) || 1);
+}
+
+/**
+ * @typedef {Object} PerformancePosition
+ * @property {number} itemIndex Índice do item ativo na setlist (0-indexed)
+ * @property {number} page Página relativa da música ativa (1-indexed)
+ */
+
+/**
+ * @typedef {Object} StepPerformanceResult
+ * @property {number} itemIndex Novo índice do item ativo na setlist
+ * @property {number} page Nova página relativa ativa
+ * @property {boolean} changedSong Indica se houve transição entre músicas
+ * @property {boolean} reachedBoundary Indica se a navegação atingiu o limite extremo (início ou fim)
+ */
+
+/**
+ * Máquina de navegação pura de palco baseada na regra página -> música.
+ *
+ * @param {PerformancePosition} position Posição atual
+ * @param {number | "next" | "prev" | "previous"} direction Direção da navegação
+ * @param {Object} [context]
+ * @param {Array<{ songId: string }>} [context.items] Lista de itens da setlist
+ * @param {any} [context.library] Catálogo da biblioteca para consulta de páginas
+ * @returns {StepPerformanceResult}
+ */
+export function stepPerformancePosition(position, direction, { items = [], library = null } = {}) {
+  const dir = direction === "prev" || direction === "previous" || Number(direction) < 0 ? -1 : 1;
+  const itemCount = Array.isArray(items) ? items.length : 0;
+
+  if (itemCount === 0) {
+    const rawPage = Number(position?.page) || 1;
+    const page = dir > 0 ? rawPage + 1 : Math.max(1, rawPage - 1);
+    return {
+      itemIndex: 0,
+      page,
+      changedSong: false,
+      reachedBoundary: dir < 0 ? rawPage <= 1 : false,
+    };
+  }
+
+  const currentIndex = Math.max(0, Math.min(itemCount - 1, Number(position?.itemIndex) || 0));
+  const currentSong = library ? findSong(library, items[currentIndex]?.songId) : null;
+  const currentPages = getSongPageCount(currentSong);
+  const currentPage = Math.max(1, Math.min(currentPages, Number(position?.page) || 1));
+
+  if (dir > 0) {
+    if (currentPage < currentPages) {
+      return {
+        itemIndex: currentIndex,
+        page: currentPage + 1,
+        changedSong: false,
+        reachedBoundary: false,
+      };
+    }
+    if (currentIndex + 1 < itemCount) {
+      return {
+        itemIndex: currentIndex + 1,
+        page: 1,
+        changedSong: true,
+        reachedBoundary: false,
+      };
+    }
+    return {
+      itemIndex: currentIndex,
+      page: currentPages,
+      changedSong: false,
+      reachedBoundary: true,
+    };
+  } else {
+    if (currentPage > 1) {
+      return {
+        itemIndex: currentIndex,
+        page: currentPage - 1,
+        changedSong: false,
+        reachedBoundary: false,
+      };
+    }
+    if (currentIndex > 0) {
+      const prevIndex = currentIndex - 1;
+      const prevSong = library ? findSong(library, items[prevIndex]?.songId) : null;
+      const prevPages = getSongPageCount(prevSong);
+      return {
+        itemIndex: prevIndex,
+        page: prevPages,
+        changedSong: true,
+        reachedBoundary: false,
+      };
+    }
+    return {
+      itemIndex: 0,
+      page: 1,
+      changedSong: false,
+      reachedBoundary: true,
+    };
+  }
+}
+
+/**
+ * Consulta se é possível avançar ou recuar a partir da posição atual.
+ *
+ * @param {PerformancePosition} position
+ * @param {number | "next" | "prev" | "previous"} direction
+ * @param {Object} [context]
+ * @param {Array<{ songId: string }>} [context.items]
+ * @param {any} [context.library]
+ * @returns {boolean}
+ */
+export function canStepPerformance(position, direction, context = {}) {
+  const result = stepPerformancePosition(position, direction, context);
+  return !result.reachedBoundary;
+}

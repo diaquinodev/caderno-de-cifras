@@ -13,6 +13,9 @@ import {
   countPdfDocumentReferences,
   collectOrphanPdfDocuments,
   removePdfDocument,
+  getSongPageCount,
+  stepPerformancePosition,
+  canStepPerformance,
 } from "./store.js";
 
 test("blankLibrary inicia na versao 2 com pdfDocuments vazio", () => {
@@ -319,4 +322,77 @@ test("applyPdfSplitDraft aplica divisao atomicamente criando musicas e registran
   assert.equal(song2.title, "Música 2");
   assert.deepEqual(song2.pdfRef, { documentId: "doc-chic-12", firstPage: 7, lastPage: 8 });
   assert.equal(song2.pdfPages, 2);
+});
+
+
+test("getSongPageCount calcula paginas utilizaveis para cifras e partituras", () => {
+  assert.equal(getSongPageCount(null), 1);
+  assert.equal(getSongPageCount({}), 1);
+  assert.equal(getSongPageCount({ pdfRef: { documentId: "doc-1", firstPage: 7, lastPage: 8 } }), 2);
+  assert.equal(getSongPageCount({ pdfPages: 4 }), 4);
+});
+
+test("stepPerformancePosition navega paginas e musicas na setlist com retorno para a ultima pagina", () => {
+  const library = {
+    version: 2,
+    songs: [
+      { id: "s-cifra-1", title: "Cifra 1" }, // 1 pagina
+      { id: "s-pdf-2", title: "Partitura 2", pdfRef: { documentId: "d1", firstPage: 7, lastPage: 8 } }, // 2 paginas
+      { id: "s-cifra-3", title: "Cifra 3" }, // 1 pagina
+    ],
+  };
+  const items = [
+    { songId: "s-cifra-1" },
+    { songId: "s-pdf-2" },
+    { songId: "s-cifra-3" },
+  ];
+
+  // 1. Início da setlist: Música 0, Página 1
+  const pos0 = { itemIndex: 0, page: 1 };
+  assert.equal(canStepPerformance(pos0, -1, { items, library }), false);
+  assert.equal(canStepPerformance(pos0, 1, { items, library }), true);
+
+  // 2. Avança de Música 0 (1 página) -> vai para Música 1, Página 1
+  const step1 = stepPerformancePosition(pos0, 1, { items, library });
+  assert.deepEqual(step1, { itemIndex: 1, page: 1, changedSong: true, reachedBoundary: false });
+
+  // 3. Avança dentro de Música 1 (página 1 de 2 -> página 2 de 2)
+  const step2 = stepPerformancePosition(step1, 1, { items, library });
+  assert.deepEqual(step2, { itemIndex: 1, page: 2, changedSong: false, reachedBoundary: false });
+
+  // 4. Avança de Música 1 página 2 -> vai para Música 2, Página 1
+  const step3 = stepPerformancePosition(step2, 1, { items, library });
+  assert.deepEqual(step3, { itemIndex: 2, page: 1, changedSong: true, reachedBoundary: false });
+
+  // 5. Final da setlist: não avança além do limite
+  assert.equal(canStepPerformance(step3, 1, { items, library }), false);
+  const stepEnd = stepPerformancePosition(step3, 1, { items, library });
+  assert.deepEqual(stepEnd, { itemIndex: 2, page: 1, changedSong: false, reachedBoundary: true });
+
+  // 6. RECUO CRUCIAL: De Música 2 (pág 1) recuando para Música 1 -> DEVE ENTRAR NA PÁGINA 2 DE 2!
+  const stepBackToPdf = stepPerformancePosition(step3, -1, { items, library });
+  assert.deepEqual(stepBackToPdf, { itemIndex: 1, page: 2, changedSong: true, reachedBoundary: false });
+
+  // 7. Recua dentro de Música 1 (página 2 de 2 -> página 1 de 2)
+  const stepBackWithinPdf = stepPerformancePosition(stepBackToPdf, -1, { items, library });
+  assert.deepEqual(stepBackWithinPdf, { itemIndex: 1, page: 1, changedSong: false, reachedBoundary: false });
+
+  // 8. Recua de Música 1 página 1 -> volta para Música 0, Página 1
+  const stepBackToFirst = stepPerformancePosition(stepBackWithinPdf, -1, { items, library });
+  assert.deepEqual(stepBackToFirst, { itemIndex: 0, page: 1, changedSong: true, reachedBoundary: false });
+
+  // 9. Limite inicial: não recua antes de Música 0, Página 1
+  const stepBeforeStart = stepPerformancePosition(stepBackToFirst, -1, { items, library });
+  assert.deepEqual(stepBeforeStart, { itemIndex: 0, page: 1, changedSong: false, reachedBoundary: true });
+});
+
+test("stepPerformancePosition funciona para musica avulsa fora de setlist", () => {
+  const single1 = stepPerformancePosition({ itemIndex: 0, page: 1 }, 1, { items: [] });
+  assert.deepEqual(single1, { itemIndex: 0, page: 2, changedSong: false, reachedBoundary: false });
+
+  const singleBack = stepPerformancePosition({ itemIndex: 0, page: 2 }, -1, { items: [] });
+  assert.deepEqual(singleBack, { itemIndex: 0, page: 1, changedSong: false, reachedBoundary: false });
+
+  const singleBoundary = stepPerformancePosition({ itemIndex: 0, page: 1 }, -1, { items: [] });
+  assert.deepEqual(singleBoundary, { itemIndex: 0, page: 1, changedSong: false, reachedBoundary: true });
 });

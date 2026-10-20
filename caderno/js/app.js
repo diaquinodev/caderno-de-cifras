@@ -30,7 +30,6 @@ import {
   uid,
   countPdfDocumentReferences,
   removePdfDocument,
-  pdfRangeSize,
   relativeToPhysicalPage,
   createPdfSplitDraft,
   addSplitRange,
@@ -38,6 +37,9 @@ import {
   removeSplitRange,
   validateSplitDraft,
   applyPdfSplitDraft,
+  getSongPageCount,
+  stepPerformancePosition,
+  canStepPerformance,
 } from "./store.js";
 
 const main = document.querySelector("#main");
@@ -281,7 +283,16 @@ window.addEventListener("beforeunload", () => {
   saveLibrary(state.library);
 });
 
-window.addEventListener("resize", () => fitPerformanceSheet());
+let resizeDebounce = 0;
+window.addEventListener("resize", () => {
+  fitPerformanceSheet();
+  clearTimeout(resizeDebounce);
+  resizeDebounce = setTimeout(() => {
+    if (document.querySelector(".pdf-canvas")) {
+      mountPdfFrame();
+    }
+  }, 100);
+});
 window.addEventListener("beforeprint", () => {
   clearSheetFit(document.querySelector(".paper.sheet"));
   fitGlyphs();
@@ -1123,14 +1134,17 @@ function viewStage() {
   }).join("");
   const next = setlist.items[state.stageIndex + 1];
   const nextSong = next ? findSong(state.library, next.songId) : null;
-  const page = Math.min(state.stagePage, song.pdfPages || 1);
+  const pages = getSongPageCount(song);
+  const page = Math.min(state.stagePage, pages);
+  const canPrev = canStepPerformance({ itemIndex: state.stageIndex, page }, -1, { items: setlist.items, library: state.library });
+  const canNext = canStepPerformance({ itemIndex: state.stageIndex, page }, 1, { items: setlist.items, library: state.library });
   return `<section>
     <div class="stage-bar no-print">
       <button class="btn ghost" type="button" data-action="exit-stage">Sair do palco</button>
       <select id="stage-picker" aria-label="Música da setlist">${options}</select>
       <div class="inline-actions">
-        <button class="btn ghost" type="button" data-action="stage-prev">Anterior</button>
-        <button class="btn ghost" type="button" data-action="stage-next">Próxima</button>
+        <button class="btn ghost" type="button" data-action="stage-prev"${canPrev ? "" : " disabled"}>Anterior</button>
+        <button class="btn ghost" type="button" data-action="stage-next"${canNext ? "" : " disabled"}>Próxima</button>
       </div>
     </div>
     ${readToggle(song)}
@@ -1511,43 +1525,41 @@ async function exportLibrary() {
   toast("Biblioteca exportada. Guarde esse arquivo: ele é a cópia das cifras, playlists e PDFs.");
 }
 
-function shiftStage(direction) {
-  const setlist = currentSetlist();
-  if (!setlist?.items.length) return null;
-  const next = state.stageIndex + direction;
-  if (next < 0 || next >= setlist.items.length) return null;
-  state.stageIndex = next;
-  return setlist.items[next];
-}
-
 function stepPerformance(direction) {
-  const song = currentSong();
-  const pages = song?.pdfRef ? pdfRangeSize(song.pdfRef) : (song?.pdfPages || 0);
-  if (pages > 1) {
-    const nextPage = state.stagePage + direction;
-    if (nextPage >= 1 && nextPage <= pages) {
-      state.stagePage = nextPage;
-      renderMain();
-      return;
-    }
+  const onStage = state.route.name === "stage";
+  const setlist = onStage ? currentSetlist() : null;
+  const items = setlist?.items || (currentSong() ? [{ songId: currentSong().id }] : []);
+
+  const currentPos = {
+    itemIndex: onStage ? state.stageIndex : 0,
+    page: state.stagePage || 1,
+  };
+
+  const nextPos = stepPerformancePosition(currentPos, direction, {
+    items,
+    library: state.library,
+  });
+
+  if (onStage) {
+    state.stageIndex = nextPos.itemIndex;
+    state.stagePage = nextPos.page;
+  } else {
+    state.stagePage = nextPos.page;
   }
-  if (state.route.name !== "stage") return;
-  const item = shiftStage(direction);
-  if (!item) return;
-  const arrived = findSong(state.library, item.songId);
-  const arrivedPages = arrived?.pdfRef ? pdfRangeSize(arrived.pdfRef) : (arrived?.pdfPages || 1);
-  state.stagePage = direction < 0 ? arrivedPages : 1;
+
   renderMain();
 }
 
 function pdfStage(song, page) {
-  const pages = song.pdfRef ? pdfRangeSize(song.pdfRef) : (song.pdfPages || 1);
+  const pages = getSongPageCount(song);
   const safePage = Math.min(Math.max(page || 1, 1), pages);
   const physicalPage = song.pdfRef ? relativeToPhysicalPage(song.pdfRef, safePage) : safePage;
   const onStage = state.route.name === "stage";
   const setlist = onStage ? currentSetlist() : null;
-  const canPrev = safePage > 1 || (onStage && state.stageIndex > 0);
-  const canNext = safePage < pages || (onStage && setlist && state.stageIndex < setlist.items.length - 1);
+  const items = setlist?.items || (song ? [{ songId: song.id }] : []);
+  const currentPos = { itemIndex: onStage ? state.stageIndex : 0, page: safePage };
+  const canPrev = canStepPerformance(currentPos, -1, { items, library: state.library });
+  const canNext = canStepPerformance(currentPos, 1, { items, library: state.library });
   const docId = song.pdfRef?.documentId || song.id;
   return `<div class="pdf-read">
     <canvas class="pdf-canvas" data-doc-id="${esc(docId)}" data-song-id="${esc(song.id)}" data-page="${safePage}" data-physical-page="${physicalPage}" aria-label="${esc(song.title)}, página ${safePage}"></canvas>
