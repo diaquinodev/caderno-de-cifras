@@ -10,6 +10,9 @@ import {
   pdfRangeSize,
   physicalToRelativePage,
   relativeToPhysicalPage,
+  countPdfDocumentReferences,
+  collectOrphanPdfDocuments,
+  removePdfDocument,
 } from "./store.js";
 
 test("blankLibrary inicia na versao 2 com pdfDocuments vazio", () => {
@@ -160,4 +163,41 @@ test("migracao v1 para v2 e idempotente", () => {
   assert.equal(secondPass.version, 2);
   assert.equal(secondPass.pdfDocuments.length, 1);
   assert.deepEqual(secondPass, firstPass);
+});
+
+test("countPdfDocumentReferences calcula corretamente referencias compartilhadas", () => {
+  const library = {
+    version: 2,
+    pdfDocuments: [{ id: "doc-shared", name: "songbook.pdf", pageCount: 12 }],
+    songs: [
+      { id: "song-1", title: "Tema 1", pdfRef: { documentId: "doc-shared", firstPage: 1, lastPage: 4 } },
+      { id: "song-2", title: "Tema 2", pdfRef: { documentId: "doc-shared", firstPage: 5, lastPage: 8 } },
+      { id: "song-3", title: "Cifra Pura", pdfRef: null },
+    ],
+  };
+
+  assert.equal(countPdfDocumentReferences(library, "doc-shared"), 2);
+  assert.equal(countPdfDocumentReferences(library, "doc-inexistente"), 0);
+  assert.equal(countPdfDocumentReferences(null, "doc-shared"), 0);
+});
+
+test("collectOrphanPdfDocuments e removePdfDocument identificam e limpam documentos sem referencias", () => {
+  const library = {
+    version: 2,
+    pdfDocuments: [
+      { id: "doc-active", name: "ativo.pdf", pageCount: 5 },
+      { id: "doc-orphan", name: "orfao.pdf", pageCount: 2 },
+    ],
+    songs: [
+      { id: "s1", title: "Musica", pdfRef: { documentId: "doc-active", firstPage: 1, lastPage: 5 } },
+    ],
+  };
+
+  const orphans = collectOrphanPdfDocuments(library);
+  assert.deepEqual(orphans, ["doc-orphan"]);
+
+  removePdfDocument(library, "doc-orphan");
+  assert.equal(library.pdfDocuments.length, 1);
+  assert.equal(library.pdfDocuments[0].id, "doc-active");
+  assert.deepEqual(collectOrphanPdfDocuments(library), []);
 });

@@ -29,3 +29,6 @@ export function buildMinimalPdf(pageCount = 2) {
 
 export const MINIMAL_PDF_BUFFER = buildMinimalPdf(2);
 export const MINIMAL_PDF_BASE64 = MINIMAL_PDF_BUFFER.toString("base64");
+
+export const TWELVE_PAGE_PDF_BUFFER = buildMinimalPdf(12);
+export const TWELVE_PAGE_PDF_BASE64 = TWELVE_PAGE_PDF_BUFFER.toString("base64");
