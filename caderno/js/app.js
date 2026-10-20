@@ -5,8 +5,10 @@ import {
   updateDraftTimeSignature,
   splitMeasure,
   mergeMeasures,
+  moveMeasure,
   splitSection,
   convertDraftToSong,
+  validateDraftForConfirmation,
 } from "./draft.js";
 import {
   KEYS,
@@ -76,6 +78,8 @@ const state = {
   confirm: null,
   wizard: null,
   currentDraft: null,
+  draftHistory: [],
+  draftActiveTab: "chart",
 };
 
 const REPEAT_CYCLE = ["", "start", "end", "both"];
@@ -616,6 +620,9 @@ const actions = {
   "draft-split-measure": (btn) => handleDraftSplitMeasure(btn.dataset.sectionId, btn.dataset.measureId),
   "draft-merge-measure": (btn) => handleDraftMergeMeasure(btn.dataset.sectionId, btn.dataset.measureId, btn.dataset.nextId),
   "draft-split-section": (btn) => handleDraftSplitSection(btn.dataset.sectionId),
+  "draft-move-measure": (btn) => handleDraftMoveMeasure(btn.dataset.sectionId, btn.dataset.measureId, Number(btn.dataset.dir) || 0),
+  "draft-switch-tab": (btn) => handleDraftSwitchTab(btn.dataset.tab),
+  "draft-undo": () => handleDraftUndo(),
   "draft-confirm": () => confirmDraft(),
   "draft-cancel": () => cancelDraft(),
   "apply-paste": () => applyPaste(),
@@ -1423,12 +1430,16 @@ async function openDraft() {
       pasteError(res.error?.message || "Não consegui ler esse link.");
       return;
     }
+    state.draftHistory = [];
+    state.draftActiveTab = "chart";
     state.currentDraft = suggestChart(res.source);
     renderDraftModal();
     return;
   }
   try {
     const source = parseCifraSource(raw);
+    state.draftHistory = [];
+    state.draftActiveTab = "chart";
     state.currentDraft = suggestChart(source);
     renderDraftModal();
   } catch (err) {
@@ -1436,21 +1447,56 @@ async function openDraft() {
   }
 }
 
+function pushDraftHistory() {
+  if (!state.currentDraft) return;
+  if (!state.draftHistory) state.draftHistory = [];
+  state.draftHistory.push(JSON.parse(JSON.stringify(state.currentDraft)));
+  if (state.draftHistory.length > 25) state.draftHistory.shift();
+}
+
+function handleDraftSwitchTab(tab) {
+  state.draftActiveTab = tab === "source" ? "source" : "chart";
+  renderDraftModal();
+}
+
+function handleDraftUndo() {
+  if (!state.draftHistory || !state.draftHistory.length) return;
+  state.currentDraft = state.draftHistory.pop();
+  renderDraftModal();
+  toast("Ação desfeita.");
+}
+
 function handleDraftTimeSig(newSig) {
   if (!state.currentDraft) return;
+  pushDraftHistory();
   state.currentDraft = updateDraftTimeSignature(state.currentDraft, newSig);
   renderDraftModal();
 }
 
 function handleDraftSplitMeasure(sectionId, measureId) {
   if (!state.currentDraft) return;
+  pushDraftHistory();
   state.currentDraft = splitMeasure(state.currentDraft, sectionId, measureId);
   renderDraftModal();
 }
 
 function handleDraftMergeMeasure(sectionId, measureId, nextId) {
   if (!state.currentDraft) return;
+  pushDraftHistory();
   state.currentDraft = mergeMeasures(state.currentDraft, sectionId, measureId, nextId);
+  renderDraftModal();
+}
+
+function handleDraftMoveMeasure(sectionId, measureId, dir) {
+  if (!state.currentDraft) return;
+  const sec = state.currentDraft.sections.find((s) => s.id === sectionId);
+  if (!sec) return;
+  const idx = sec.measures.findIndex((m) => m.id === measureId);
+  if (idx === -1) return;
+  const targetIdx = idx + dir;
+  if (targetIdx < 0 || targetIdx >= sec.measures.length) return;
+  pushDraftHistory();
+  state.currentDraft = moveMeasure(state.currentDraft, sectionId, measureId, sectionId, targetIdx);
   renderDraftModal();
 }
 
@@ -1459,6 +1505,7 @@ function handleDraftSplitSection(sectionId) {
   const sec = state.currentDraft.sections.find((s) => s.id === sectionId);
   if (!sec || sec.measures.length < 2) return;
   const at = Math.floor(sec.measures.length / 2);
+  pushDraftHistory();
   state.currentDraft = splitSection(state.currentDraft, sectionId, at, "Parte B");
   renderDraftModal();
 }
@@ -1466,6 +1513,23 @@ function handleDraftSplitSection(sectionId) {
 function confirmDraft() {
   if (!state.currentDraft) return;
   const draft = state.currentDraft;
+  const validation = validateDraftForConfirmation(draft);
+  if (!validation.valid) {
+    const errorEl = document.querySelector("#draft-time-sig-error");
+    const bannerEl = document.querySelector("#draft-time-sig-banner");
+    const msg = validation.errors.join(" ");
+    if (errorEl) {
+      errorEl.hidden = false;
+      errorEl.textContent = msg;
+    }
+    if (bannerEl) {
+      bannerEl.classList.add("pulse-error");
+      bannerEl.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    toast(msg);
+    return;
+  }
+
   const song = convertDraftToSong(draft);
   const cur = currentSong();
 
@@ -1489,14 +1553,46 @@ function confirmDraft() {
   }
 
   state.currentDraft = null;
+  state.draftHistory = [];
   closeModal();
   renderMain();
 }
 
 function cancelDraft() {
   state.currentDraft = null;
+  state.draftHistory = [];
   closeModal();
   toast("Rascunho cancelado. Nenhuma alteração salva.");
+}
+
+function renderDraftSourceContent(source) {
+  if (!source) {
+    return `<p class="meta">Fonte literal não disponível.</p>`;
+  }
+  const blocksHtml = source.blocks.map((block) => {
+    let badgeClass = "badge";
+    let badgeLabel = `Seção: ${esc(block.label || "")}`;
+    if (block.kind === "tab") {
+      badgeClass = "badge tab";
+      badgeLabel = `Tablatura: ${esc(block.label || "Tab")}`;
+    } else if (block.kind === "anonymous") {
+      badgeClass = "badge anon";
+      badgeLabel = "Bloco anônimo";
+    }
+
+    const chordsInBlock = block.lines.flatMap((l) => l.chords);
+    const chordsStr = chordsInBlock.map((c) => esc(c.raw)).join(" ");
+
+    return `<div class="source-block-card" style="margin-bottom:8px;">
+      <div><span class="${badgeClass}">${badgeLabel}</span> <small class="meta">${block.lines.length} linha(s), ${chordsInBlock.length} acorde(s)</small></div>
+      ${chordsStr ? `<div class="source-chords-list">${chordsStr}</div>` : ""}
+    </div>`;
+  }).join("");
+
+  return `<div>
+    <p class="meta"><strong>Total:</strong> ${source.blocks.length} bloco(s), ${source.allChords.length} acorde(s) literais.</p>
+    <div style="margin-top:8px;">${blocksHtml}</div>
+  </div>`;
 }
 
 function renderDraftModal() {
@@ -1504,22 +1600,26 @@ function renderDraftModal() {
   if (!draft) return;
 
   const inv = verifyDraftInvariantsOriginal(draft);
+  const activeTab = state.draftActiveTab || "chart";
+  const hasHistory = Boolean(state.draftHistory && state.draftHistory.length);
 
   const timeSigBanner = !draft.timeSignature
     ? `<div class="draft-warning-banner" id="draft-time-sig-banner">
         <strong>⚠ Fórmula de compasso não definida:</strong>
         <p class="meta" style="margin:4px 0 8px;">A fonte não especificou a métrica. Escolha uma fórmula antes de confirmar:</p>
         <div class="inline-actions">
-          <button type="button" class="btn small" data-action="draft-set-timesig" data-timesig="4/4">4/4</button>
-          <button type="button" class="btn small" data-action="draft-set-timesig" data-timesig="2/4">2/4</button>
-          <button type="button" class="btn small" data-action="draft-set-timesig" data-timesig="3/4">3/4</button>
-          <button type="button" class="btn small" data-action="draft-set-timesig" data-timesig="6/8">6/8</button>
+          <button type="button" class="btn small draft-set-timesig" data-action="draft-set-timesig" data-timesig="4/4">4/4</button>
+          <button type="button" class="btn small draft-set-timesig" data-action="draft-set-timesig" data-timesig="2/4">2/4</button>
+          <button type="button" class="btn small draft-set-timesig" data-action="draft-set-timesig" data-timesig="3/4">3/4</button>
+          <button type="button" class="btn small draft-set-timesig" data-action="draft-set-timesig" data-timesig="6/8">6/8</button>
         </div>
       </div>`
-    : `<div class="status" style="margin:8px 0;">
+    : `<div class="status" style="margin:8px 0;" id="draft-time-sig-banner">
         Fórmula de compasso selecionada: <strong id="selected-timesig">${esc(draft.timeSignature)}</strong>
         <button type="button" class="btn ghost micro" style="margin-left:8px;" data-action="draft-clear-timesig">Alterar</button>
       </div>`;
+
+  const errorBanner = `<div id="draft-time-sig-error" class="draft-error-banner" hidden></div>`;
 
   const warningsHtml = draft.warnings.length
     ? `<div class="draft-warnings-list" id="draft-warnings-list">
@@ -1537,6 +1637,12 @@ function renderDraftModal() {
         const canSplit = (m.sourceChords && m.sourceChords.length > 1) || m.chords.includes(" ");
         const nextMeasure = sec.measures[mIdx + 1];
 
+        const prevBtn = mIdx > 0
+          ? `<button type="button" class="btn ghost micro" data-action="draft-move-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-dir="-1" title="Mover para esquerda" aria-label="Mover compasso para esquerda">◀</button>`
+          : "";
+        const nextBtn = mIdx < sec.measures.length - 1
+          ? `<button type="button" class="btn ghost micro" data-action="draft-move-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-dir="1" title="Mover para direita" aria-label="Mover compasso para direita">▶</button>`
+          : "";
         const splitBtn = canSplit
           ? `<button type="button" class="btn ghost micro" data-action="draft-split-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" title="Dividir compasso">✂ Dividir</button>`
           : "";
@@ -1546,7 +1652,7 @@ function renderDraftModal() {
 
         return `<div class="draft-measure-box" data-measure-id="${esc(m.id)}">
           <span class="measure-chords">${esc(m.chords || "—")}</span>
-          <div class="measure-actions">${splitBtn}${mergeBtn}</div>
+          <div class="measure-actions">${prevBtn}${nextBtn}${splitBtn}${mergeBtn}</div>
         </div>`;
       }).join("");
 
@@ -1564,17 +1670,38 @@ function renderDraftModal() {
     </div>`;
   }).join("");
 
-  openModal(`<div class="modal" role="dialog" aria-modal="true" aria-labelledby="draft-title" style="max-height: min(90dvh, 850px); overflow-y: auto;">
+  const totalMeasures = draft.sections.reduce((acc, s) => acc + s.measures.length, 0);
+  const sourceContent = renderDraftSourceContent(draft.sourceSnapshot);
+
+  const tabSwitcher = `
+    <div class="draft-view-tabs" role="tablist">
+      <button type="button" class="btn ${activeTab === 'chart' ? 'primary small' : 'ghost small'}" data-action="draft-switch-tab" data-tab="chart" role="tab" aria-selected="${activeTab === 'chart'}">Compassos Sugeridos</button>
+      <button type="button" class="btn ${activeTab === 'source' ? 'primary small' : 'ghost small'}" data-action="draft-switch-tab" data-tab="source" role="tab" aria-selected="${activeTab === 'source'}">Fonte Literal Original</button>
+    </div>
+  `;
+
+  openModal(`<div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="draft-title" style="max-height: min(92dvh, 880px); overflow-y: auto;">
     <h2 id="draft-title">Rascunho Musical</h2>
     <p class="meta"><strong>Título:</strong> ${esc(draft.title)} · <strong>Tom:</strong> ${esc(draft.key)} · <strong>Artista:</strong> ${esc(draft.artist || "Não informado")}</p>
-    ${timeSigBanner}
-    ${warningsHtml}
-    <div style="margin: 12px 0;">
-      <p class="meta"><strong>Estrutura:</strong> ${draft.sections.length} seção(ões), ${draft.sections.reduce((acc, s) => acc + s.measures.length, 0)} compasso(s). ${inv.valid ? "✓ Invariantes conferidos" : "⚠ Atenção aos invariantes"}</p>
-      ${sectionsHtml}
+    ${tabSwitcher}
+    <div class="draft-review-layout ${activeTab === 'source' ? 'show-source-tab' : 'show-chart-tab'}">
+      <div class="draft-source-column">
+        <h3>Fonte Literal Original</h3>
+        ${sourceContent}
+      </div>
+      <div class="draft-chart-column">
+        ${timeSigBanner}
+        ${errorBanner}
+        ${warningsHtml}
+        <div style="margin: 12px 0;">
+          <p class="meta"><strong>Estrutura:</strong> ${draft.sections.length} seção(ões), ${totalMeasures} compasso(s). ${inv.valid ? "✓ Invariantes conferidos" : "⚠ Atenção aos invariantes"}</p>
+          ${sectionsHtml}
+        </div>
+      </div>
     </div>
-    <div class="inline-actions" style="margin-top: 16px;">
-      <button class="btn primary" type="button" data-action="draft-confirm">Confirmar e criar música</button>
+    <div class="inline-actions draft-footer-actions" style="margin-top: 16px;">
+      <button class="btn primary" type="button" data-action="draft-confirm" id="btn-draft-confirm">Confirmar e criar música</button>
+      <button class="btn ghost" type="button" data-action="draft-undo" id="btn-draft-undo" ${hasHistory ? "" : "disabled"}>↩ Desfazer</button>
       <button class="btn ghost" type="button" data-action="draft-cancel">Cancelar rascunho</button>
     </div>
   </div>`);
@@ -1958,9 +2085,13 @@ function fitPerformanceSheet() {
   const availableW = Math.max(160, window.innerWidth - 16);
   const naturalW = paper.offsetWidth;
   const naturalH = paper.offsetHeight;
-  let scale = Math.min(availableW / naturalW, availableH / naturalH);
-  if (!Number.isFinite(scale) || scale <= 0) return;
-  scale = Math.min(scale, 1.65);
+
+  // Política para cifras longas: manter escala mínima legível a distância de estante
+  const MIN_READABLE_SCALE = 0.70;
+  const rawScale = Math.min(availableW / naturalW, availableH / naturalH);
+  if (!Number.isFinite(rawScale) || rawScale <= 0) return;
+
+  const scale = Math.min(Math.max(MIN_READABLE_SCALE, rawScale), 1.65);
   if (scale < 0.995) {
     paper.style.transformOrigin = "top center";
     paper.style.transform = `scale(${scale})`;

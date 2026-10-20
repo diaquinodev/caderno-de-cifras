@@ -1139,4 +1139,63 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     const cleanErrors = errors.filter((e) => !e.includes("403 (Forbidden)"));
     expect(cleanErrors).toEqual([]);
   });
+  test("fase 10: revisao responsiva - bloqueio de confirmacao sem compasso, desfazer, mover e visualizacao de fonte", async ({ page }) => {
+    const errors = await setupPage(page, { seedPdf: false });
+    await gotoRoute(page, "#/musicas");
+
+    // 1. Abre modal com cifra colada
+    await page.click('[data-action="new-song"]');
+    await page.click('[data-action="open-paste"]');
+    await page.fill("#paste-text", "Tom: C\n[Intro]\n| C | G | Am | F |\n[A]\n| C | Em | F | G |");
+    await page.click('[data-action="open-draft"]');
+    await expect(page.locator("#draft-title")).toBeVisible();
+
+    // 2. Em tela desktop (>= 1024px), ambas as colunas são exibidas lado a lado
+    await expect(page.locator(".draft-source-column")).toBeVisible();
+    await expect(page.locator(".draft-chart-column")).toBeVisible();
+    await expect(page.locator(".draft-source-column")).toContainText("Intro");
+
+    // 3. Tenta confirmar sem fórmula de compasso selecionada
+    await page.click('[data-action="draft-confirm"]');
+    // Modal NÃO deve fechar
+    await expect(page.locator("#draft-title")).toBeVisible();
+    await expect(page.locator("#draft-time-sig-error")).toBeVisible();
+    await expect(page.locator("#draft-time-sig-error")).toContainText("Escolha uma fórmula de compasso");
+    await expect(page.locator("#draft-time-sig-banner")).toHaveClass(/pulse-error/);
+
+    // 4. Escolhe fórmula de compasso 4/4
+    await page.click('[data-action="draft-set-timesig"][data-timesig="4/4"]');
+    await expect(page.locator("#selected-timesig")).toHaveText("4/4");
+
+    // 5. Em tela móvel (< 1024px), testa alternância por abas
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.click('[data-action="draft-switch-tab"][data-tab="source"]');
+    await expect(page.locator(".draft-source-column")).toBeVisible();
+    await expect(page.locator(".draft-chart-column")).not.toBeVisible();
+
+    await page.click('[data-action="draft-switch-tab"][data-tab="chart"]');
+    await expect(page.locator(".draft-chart-column")).toBeVisible();
+    await expect(page.locator(".draft-source-column")).not.toBeVisible();
+
+    // 6. Testa mover compasso e desfazer (Undo)
+    const firstSectionMeasures = page.locator(".draft-section-card").first().locator(".draft-measure-box");
+    const initialFirstChord = await firstSectionMeasures.first().locator(".measure-chords").textContent();
+
+    // Move primeiro compasso para direita
+    await firstSectionMeasures.first().locator('[data-action="draft-move-measure"][data-dir="1"]').click();
+    const movedFirstChord = await firstSectionMeasures.first().locator(".measure-chords").textContent();
+    expect(movedFirstChord).not.toEqual(initialFirstChord);
+
+    // Desfaz a ação
+    await page.click("#btn-draft-undo");
+    const restoredFirstChord = await firstSectionMeasures.first().locator(".measure-chords").textContent();
+    expect(restoredFirstChord).toEqual(initialFirstChord);
+
+    // 7. Confirma o rascunho com sucesso
+    await page.click('[data-action="draft-confirm"]');
+    await expect(page.locator("#draft-title")).not.toBeVisible();
+    await expect(page.locator(".sheet-title")).toBeVisible();
+
+    expect(errors).toEqual([]);
+  });
 });

@@ -606,3 +606,27 @@ export function convertDraftToSong(draft) {
     updatedAt: now,
   };
 }
+
+/**
+ * Valida se um rascunho atende a todos os requisitos para ser confirmado e salvo na biblioteca.
+ * Exige escolha explícita da fórmula de compasso (Don Norman: restrições e prevenção de erro).
+ *
+ * @param {ImportDraft} draft
+ * @returns {{ valid: boolean, errors: string[] }}
+ */
+export function validateDraftForConfirmation(draft) {
+  const errors = [];
+  if (!draft) {
+    return { valid: false, errors: ["Rascunho inexistente."] };
+  }
+  if (!draft.timeSignature || !draft.timeSignature.trim()) {
+    errors.push("Escolha uma fórmula de compasso (ex.: 4/4, 2/4, 3/4, 6/8) antes de confirmar a música.");
+  }
+  if (!draft.title || !draft.title.trim()) {
+    errors.push("A música precisa de um título.");
+  }
+  return {
+    valid: errors.length === 0,
+    errors,
+  };
+}
