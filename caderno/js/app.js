@@ -1,4 +1,13 @@
 import {
+  suggestChart,
+  verifyDraftInvariants as verifyDraftInvariantsOriginal,
+  updateDraftTimeSignature,
+  splitMeasure,
+  mergeMeasures,
+  splitSection,
+  convertDraftToSong,
+} from "./draft.js";
+import {
   KEYS,
   STYLES,
   TIME_SIGNATURES,
@@ -65,6 +74,7 @@ const state = {
   clean: false,
   confirm: null,
   wizard: null,
+  currentDraft: null,
 };
 
 const REPEAT_CYCLE = ["", "start", "end", "both"];
@@ -599,6 +609,14 @@ const actions = {
   "cycle-ending": (element) => cycleMeasure(element, "ending", ENDING_CYCLE),
   "cycle-repeat": (element) => cycleMeasure(element, "repeat", REPEAT_CYCLE),
   "open-paste": () => openPaste(),
+  "open-draft": () => openDraft(),
+  "draft-set-timesig": (btn) => handleDraftTimeSig(btn.dataset.timesig),
+  "draft-clear-timesig": () => handleDraftTimeSig(""),
+  "draft-split-measure": (btn) => handleDraftSplitMeasure(btn.dataset.sectionId, btn.dataset.measureId),
+  "draft-merge-measure": (btn) => handleDraftMergeMeasure(btn.dataset.sectionId, btn.dataset.measureId, btn.dataset.nextId),
+  "draft-split-section": (btn) => handleDraftSplitSection(btn.dataset.sectionId),
+  "draft-confirm": () => confirmDraft(),
+  "draft-cancel": () => cancelDraft(),
   "apply-paste": () => applyPaste(),
   "inspect-source": () => inspectSource(),
   "load-fixture": (btn) => loadFixture(btn.dataset.fixtureId),
@@ -1319,7 +1337,7 @@ function openPaste() {
     <p id="paste-error" class="status" hidden></p>
     <div class="inline-actions">
       <button class="btn secondary" type="button" data-action="inspect-source">Inspecionar fonte</button>
-      <button class="btn primary" type="button" data-action="apply-paste">Aplicar</button>
+      <button class="btn primary" type="button" data-action="open-draft">Gerar rascunho</button>
       <button class="btn ghost" type="button" data-action="close-modal">Cancelar</button>
     </div>
   </div>`);
@@ -1382,6 +1400,166 @@ function inspectSource() {
     <p class="meta"><strong>Total:</strong> ${source.blocks.length} bloco(s), ${source.allChords.length} acorde(s) literais. ${inv.valid ? "✓ Invariantes válidos" : "⚠ Invariantes com aviso"}</p>
     <div>${blocksHtml}</div>
   `;
+}
+
+
+function openDraft() {
+  const raw = document.querySelector("#paste-text")?.value || "";
+  if (!raw.trim()) {
+    pasteError("Cole uma cifra antes de gerar o rascunho.");
+    return;
+  }
+  try {
+    const source = parseCifraSource(raw);
+    state.currentDraft = suggestChart(source);
+    renderDraftModal();
+  } catch (err) {
+    pasteError(err.message || "Erro ao processar a fonte da cifra.");
+  }
+}
+
+function handleDraftTimeSig(newSig) {
+  if (!state.currentDraft) return;
+  state.currentDraft = updateDraftTimeSignature(state.currentDraft, newSig);
+  renderDraftModal();
+}
+
+function handleDraftSplitMeasure(sectionId, measureId) {
+  if (!state.currentDraft) return;
+  state.currentDraft = splitMeasure(state.currentDraft, sectionId, measureId);
+  renderDraftModal();
+}
+
+function handleDraftMergeMeasure(sectionId, measureId, nextId) {
+  if (!state.currentDraft) return;
+  state.currentDraft = mergeMeasures(state.currentDraft, sectionId, measureId, nextId);
+  renderDraftModal();
+}
+
+function handleDraftSplitSection(sectionId) {
+  if (!state.currentDraft) return;
+  const sec = state.currentDraft.sections.find((s) => s.id === sectionId);
+  if (!sec || sec.measures.length < 2) return;
+  const at = Math.floor(sec.measures.length / 2);
+  state.currentDraft = splitSection(state.currentDraft, sectionId, at, "Parte B");
+  renderDraftModal();
+}
+
+function confirmDraft() {
+  if (!state.currentDraft) return;
+  const draft = state.currentDraft;
+  const song = convertDraftToSong(draft);
+  const cur = currentSong();
+
+  if (cur && (cur.title === "Sem título" || !chartHasChords(cur))) {
+    cur.title = song.title;
+    cur.composer = song.composer;
+    cur.key = song.key;
+    cur.timeSignature = song.timeSignature;
+    cur.tempo = song.tempo;
+    cur.barsPerRow = song.barsPerRow;
+    cur.notes = song.notes;
+    cur.sections = song.sections;
+    cur.sourceSnapshot = song.sourceSnapshot;
+    touchSong(cur, true);
+    toast(`Música "${cur.title}" atualizada com o rascunho.`);
+  } else {
+    state.library.songs.unshift(song);
+    persist(true);
+    go(`#/musicas/${song.id}`);
+    toast(`Música "${song.title}" criada a partir do rascunho.`);
+  }
+
+  state.currentDraft = null;
+  closeModal();
+  renderMain();
+}
+
+function cancelDraft() {
+  state.currentDraft = null;
+  closeModal();
+  toast("Rascunho cancelado. Nenhuma alteração salva.");
+}
+
+function renderDraftModal() {
+  const draft = state.currentDraft;
+  if (!draft) return;
+
+  const inv = verifyDraftInvariantsOriginal(draft);
+
+  const timeSigBanner = !draft.timeSignature
+    ? `<div class="draft-warning-banner" id="draft-time-sig-banner">
+        <strong>⚠ Fórmula de compasso não definida:</strong>
+        <p class="meta" style="margin:4px 0 8px;">A fonte não especificou a métrica. Escolha uma fórmula antes de confirmar:</p>
+        <div class="inline-actions">
+          <button type="button" class="btn small" data-action="draft-set-timesig" data-timesig="4/4">4/4</button>
+          <button type="button" class="btn small" data-action="draft-set-timesig" data-timesig="2/4">2/4</button>
+          <button type="button" class="btn small" data-action="draft-set-timesig" data-timesig="3/4">3/4</button>
+          <button type="button" class="btn small" data-action="draft-set-timesig" data-timesig="6/8">6/8</button>
+        </div>
+      </div>`
+    : `<div class="status" style="margin:8px 0;">
+        Fórmula de compasso selecionada: <strong id="selected-timesig">${esc(draft.timeSignature)}</strong>
+        <button type="button" class="btn ghost micro" style="margin-left:8px;" data-action="draft-clear-timesig">Alterar</button>
+      </div>`;
+
+  const warningsHtml = draft.warnings.length
+    ? `<div class="draft-warnings-list" id="draft-warnings-list">
+        <strong>Avisos de heurística:</strong>
+        <ul>${draft.warnings.map((w) => `<li>${esc(w.message)}</li>`).join("")}</ul>
+      </div>`
+    : "";
+
+  const sectionsHtml = draft.sections.map((sec) => {
+    let contentHtml;
+    if (sec.kind === "tab") {
+      contentHtml = `<pre class="tab-view">${esc(sec.tabContent || "")}</pre>`;
+    } else {
+      const measuresHtml = sec.measures.map((m, mIdx) => {
+        const canSplit = (m.sourceChords && m.sourceChords.length > 1) || m.chords.includes(" ");
+        const nextMeasure = sec.measures[mIdx + 1];
+
+        const splitBtn = canSplit
+          ? `<button type="button" class="btn ghost micro" data-action="draft-split-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" title="Dividir compasso">✂ Dividir</button>`
+          : "";
+        const mergeBtn = nextMeasure
+          ? `<button type="button" class="btn ghost micro" data-action="draft-merge-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-next-id="${esc(nextMeasure.id)}" title="Unir com próximo">🔗 Unir</button>`
+          : "";
+
+        return `<div class="draft-measure-box" data-measure-id="${esc(m.id)}">
+          <span class="measure-chords">${esc(m.chords || "—")}</span>
+          <div class="measure-actions">${splitBtn}${mergeBtn}</div>
+        </div>`;
+      }).join("");
+
+      const splitSecBtn = sec.measures.length >= 2
+        ? `<div style="margin-top:8px;"><button type="button" class="btn ghost small" data-action="draft-split-section" data-section-id="${esc(sec.id)}">Dividir seção ao meio</button></div>`
+        : "";
+
+      contentHtml = `<div class="draft-measures-grid">${measuresHtml}</div>${splitSecBtn}`;
+    }
+
+    const badgeClass = sec.kind === "tab" ? "badge tab" : "badge";
+    return `<div class="draft-section-card" data-section-id="${esc(sec.id)}">
+      <h4>${esc(sec.label)} <span class="${badgeClass}">${esc(sec.kind)}</span> <small class="meta">(${sec.measures.length} compassos)</small></h4>
+      ${contentHtml}
+    </div>`;
+  }).join("");
+
+  openModal(`<div class="modal" role="dialog" aria-modal="true" aria-labelledby="draft-title" style="max-height: min(90dvh, 850px); overflow-y: auto;">
+    <h2 id="draft-title">Rascunho Musical</h2>
+    <p class="meta"><strong>Título:</strong> ${esc(draft.title)} · <strong>Tom:</strong> ${esc(draft.key)} · <strong>Artista:</strong> ${esc(draft.artist || "Não informado")}</p>
+    ${timeSigBanner}
+    ${warningsHtml}
+    <div style="margin: 12px 0;">
+      <p class="meta"><strong>Estrutura:</strong> ${draft.sections.length} seção(ões), ${draft.sections.reduce((acc, s) => acc + s.measures.length, 0)} compasso(s). ${inv.valid ? "✓ Invariantes conferidos" : "⚠ Atenção aos invariantes"}</p>
+      ${sectionsHtml}
+    </div>
+    <div class="inline-actions" style="margin-top: 16px;">
+      <button class="btn primary" type="button" data-action="draft-confirm">Confirmar e criar música</button>
+      <button class="btn ghost" type="button" data-action="draft-cancel">Cancelar rascunho</button>
+    </div>
+  </div>`);
 }
 
 function chartHasChords(song) {
