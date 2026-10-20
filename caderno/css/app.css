@@ -771,19 +771,35 @@ body.clean .paper.sheet { box-shadow: none; }
 }
 .read-toggle:hover, .read-toggle:focus { opacity: 1; }
 
-.tap-layer { position: fixed; inset: 0; z-index: 5; pointer-events: none; }
+.tap-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
 .tap-zone {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: calc(58px + env(safe-area-inset-top, 0px));
+  bottom: calc(64px + env(safe-area-inset-bottom, 0px));
   width: 28%;
   border: 0;
   background: transparent;
   pointer-events: auto;
   color: transparent;
+  cursor: pointer;
 }
 .tap-zone.prev { left: 0; }
 .tap-zone.next { right: 0; }
+
+body.clean .tap-zone {
+  top: env(safe-area-inset-top, 0px);
+  bottom: calc(56px + env(safe-area-inset-bottom, 0px));
+}
+
+.stage-bar {
+  position: relative;
+  z-index: 10;
+}
 .pdf-read {
   height: calc(100dvh - 76px);
   background: #fff;

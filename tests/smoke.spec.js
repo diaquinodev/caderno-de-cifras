@@ -586,4 +586,187 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     expect(errors).toEqual([]);
   });
 
+  test("fase 5: navegacao no modo palco com setlist mista e retorno para a ultima pagina da musica anterior", async ({ page }) => {
+    const stageLibrary = {
+      version: 2,
+      pdfDocuments: [
+        {
+          id: "doc-stage-12",
+          name: "partituras-show.pdf",
+          pageCount: 12,
+        },
+      ],
+      songs: [
+        {
+          id: "song-cifra-1",
+          title: "1. Cifra Inicial",
+          composer: "Compositor A",
+          key: "C",
+          tempo: 120,
+          timeSignature: "4/4",
+          sections: [{ id: "sec-1", label: "A", measures: [{ id: "m-1", chords: "C" }] }],
+        },
+        {
+          id: "song-pdf-2",
+          title: "2. Partitura Wave",
+          composer: "Tom Jobim",
+          key: "D",
+          tempo: 130,
+          timeSignature: "4/4",
+          pdfName: "partituras-show.pdf",
+          pdfPages: 2,
+          pdfRef: { documentId: "doc-stage-12", firstPage: 7, lastPage: 8 },
+          sections: [{ id: "sec-2", label: "A", measures: [{ id: "m-2", chords: "D" }] }],
+        },
+        {
+          id: "song-cifra-3",
+          title: "3. Cifra Final",
+          composer: "Compositor B",
+          key: "G",
+          tempo: 110,
+          timeSignature: "4/4",
+          sections: [{ id: "sec-3", label: "A", measures: [{ id: "m-3", chords: "G" }] }],
+        },
+      ],
+      playlists: [],
+      setlists: [
+        {
+          id: "setlist-show-1",
+          name: "Show Principal",
+          items: [
+            { songId: "song-cifra-1", key: "C" },
+            { songId: "song-pdf-2", key: "D" },
+            { songId: "song-cifra-3", key: "G" },
+          ],
+        },
+      ],
+    };
+
+    const errors = await setupPage(page, {
+      library: stageLibrary,
+      seedPdf: false,
+      customPdfs: [
+        {
+          id: "doc-stage-12",
+          name: "partituras-show.pdf",
+          pageCount: 12,
+          base64: TWELVE_PAGE_PDF_BASE64,
+        },
+      ],
+    });
+
+    // 1. Entra no modo palco
+    await gotoRoute(page, "#/setlists/setlist-show-1/palco");
+    await expect(page.locator(".stage-bar")).toBeVisible();
+    await expect(page.locator("#stage-picker")).toHaveValue("0");
+
+    // Início da setlist: botão Anterior desabilitado, Próxima habilitado
+    await expect(page.locator('[data-action="stage-prev"]')).toBeDisabled();
+    await expect(page.locator('[data-action="stage-next"]')).toBeEnabled();
+
+    // 2. Avança com o botão "Próxima" -> entra na Música 2 (Partitura), página relativa 1 (física 7)
+    await page.click('[data-action="stage-next"]');
+    await expect(page.locator("#stage-picker")).toHaveValue("1");
+
+    const canvas = page.locator("canvas.pdf-canvas");
+    await expect(canvas).toBeVisible({ timeout: 10000 });
+    await expect(canvas).toHaveAttribute("data-rendered", "true", { timeout: 10000 });
+    await expect(canvas).toHaveAttribute("data-page", "1");
+    await expect(canvas).toHaveAttribute("data-physical-page", "7");
+    await expect(page.locator(".pdf-caption")).toContainText("página 1 de 2");
+
+    // 3. Avança com a tecla ArrowRight -> permanece na Música 2, avança para página relativa 2 (física 8)
+    await page.keyboard.press("ArrowRight");
+    await expect(canvas).toHaveAttribute("data-page", "2");
+    await expect(canvas).toHaveAttribute("data-physical-page", "8");
+    await expect(page.locator(".pdf-caption")).toContainText("página 2 de 2");
+    await expect(page.locator("#stage-picker")).toHaveValue("1");
+
+    // 4. Avança com toque na zona lateral direita (.tap-zone.next) -> entra na Música 3 (Cifra Final)
+    await page.click(".tap-zone.next");
+    await expect(page.locator("#stage-picker")).toHaveValue("2");
+    await expect(page.locator("#stage-paper")).toBeVisible();
+    await expect(page.locator("h1.sheet-title")).toContainText("3. Cifra Final");
+
+    // Fim da setlist: botão Próxima desabilitado, Anterior habilitado
+    await expect(page.locator('[data-action="stage-next"]')).toBeDisabled();
+    await expect(page.locator('[data-action="stage-prev"]')).toBeEnabled();
+
+    // 5. RECUO CRUCIAL: De Música 3 (cifra) voltando com botão "Anterior" -> DEVE ENTRAR NA MÚSICA 2 NA PÁGINA 2 DE 2!
+    await page.click('[data-action="stage-prev"]');
+    await expect(page.locator("#stage-picker")).toHaveValue("1");
+    await expect(canvas).toBeVisible();
+    await expect(canvas).toHaveAttribute("data-page", "2");
+    await expect(canvas).toHaveAttribute("data-physical-page", "8");
+    await expect(page.locator(".pdf-caption")).toContainText("página 2 de 2");
+
+    // 6. Recua com a tecla ArrowLeft -> permanece na Música 2, volta para página 1 de 2 (física 7)
+    await page.keyboard.press("ArrowLeft");
+    await expect(canvas).toHaveAttribute("data-page", "1");
+    await expect(canvas).toHaveAttribute("data-physical-page", "7");
+    await expect(page.locator(".pdf-caption")).toContainText("página 1 de 2");
+
+    // 7. Recua com toque na zona lateral esquerda (.tap-zone.prev) -> volta para Música 1 (Cifra Inicial)
+    await page.click(".tap-zone.prev");
+    await expect(page.locator("#stage-picker")).toHaveValue("0");
+    await expect(page.locator("#stage-paper")).toBeVisible();
+    await expect(page.locator("h1.sheet-title")).toContainText("1. Cifra Inicial");
+    await expect(page.locator('[data-action="stage-prev"]')).toBeDisabled();
+
+    expect(errors).toEqual([]);
+  });
+
+  test("fase 5: zonas de toque laterais respeitam geometria segura e nao obstruem controles", async ({ page }) => {
+    const stageLibrary = {
+      version: 2,
+      pdfDocuments: [],
+      songs: [
+        {
+          id: "song-safe-1",
+          title: "Música Segura A",
+          composer: "Compositor",
+          key: "C",
+          tempo: 120,
+          timeSignature: "4/4",
+          sections: [{ id: "sec-1", label: "A", measures: [{ id: "m-1", chords: "C" }] }],
+        },
+        {
+          id: "song-safe-2",
+          title: "Música Segura B",
+          composer: "Compositor",
+          key: "D",
+          tempo: 120,
+          timeSignature: "4/4",
+          sections: [{ id: "sec-2", label: "A", measures: [{ id: "m-2", chords: "D" }] }],
+        },
+      ],
+      playlists: [],
+      setlists: [
+        {
+          id: "setlist-safe-1",
+          name: "Setlist Segura",
+          items: [{ songId: "song-safe-1" }, { songId: "song-safe-2" }],
+        },
+      ],
+    };
+
+    const errors = await setupPage(page, { library: stageLibrary, seedPdf: false });
+    await gotoRoute(page, "#/setlists/setlist-safe-1/palco");
+
+    // Verifica que o seletor #stage-picker pode ser clicado e alterado diretamente sem ser bloqueado pela tap zone
+    const picker = page.locator("#stage-picker");
+    await expect(picker).toBeVisible();
+    await picker.selectOption("1");
+    await expect(picker).toHaveValue("1");
+    await expect(page.locator("h1.sheet-title")).toContainText("Música Segura B");
+
+    // Verifica que o botão "Sair do palco" no canto superior esquerdo pode ser clicado sem disparar a tap-zone.prev
+    const exitBtn = page.locator('[data-action="exit-stage"]');
+    await expect(exitBtn).toBeVisible();
+    await exitBtn.click();
+    await expect(page).toHaveURL(/#\/setlists\/setlist-safe-1/);
+
+    expect(errors).toEqual([]);
+  });
+
 });
