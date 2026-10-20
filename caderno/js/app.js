@@ -12,6 +12,8 @@ import { loadPdfDocument, savePdfDocument, deletePdfDocument } from "./files.js"
 import { createBackupV2, executeRestore } from "./backup.js";
 import { FORMS, findForm } from "./forms.js";
 import { chartFromCifraHtml, chartFromCifraPlain, pastedCifraLink } from "./cifra.js";
+import { parseCifraSource, verifyCifraSourceInvariants } from "./source.js";
+import { ALL_SIX_FIXTURES } from "./fixtures/cifras.js";
 import { analyzeSamples } from "./listen.js";
 import { inspectPdf, paintPdf, releasePdf } from "./pdfview.js";
 import {
@@ -598,6 +600,8 @@ const actions = {
   "cycle-repeat": (element) => cycleMeasure(element, "repeat", REPEAT_CYCLE),
   "open-paste": () => openPaste(),
   "apply-paste": () => applyPaste(),
+  "inspect-source": () => inspectSource(),
+  "load-fixture": (btn) => loadFixture(btn.dataset.fixtureId),
   "commit-key": () => commitPreviewKey(),
   "clear-preview": () => {
     state.previewKey = null;
@@ -1299,14 +1303,85 @@ function isYoutubeUrl(value) {
 }
 
 function openPaste() {
+  const fixturesHtml = ALL_SIX_FIXTURES.map(
+    (f) => `<button type="button" class="btn ghost small" data-action="load-fixture" data-fixture-id="${esc(f.id)}">${esc(f.name)}</button>`
+  ).join(" ");
+
   openModal(`<div class="modal" role="dialog" aria-modal="true" aria-labelledby="paste-title">
     <h2 id="paste-title">Colar cifra</h2>
     <p>Cole um link do Cifra Club, os acordes da cifra ou um mapa com barras. A letra não entra na cifra. <code>|:</code> e <code>:|</code> marcam repetição, <code>[1]</code> e <code>[2]</code> marcam as casas.</p>
+    <div class="fixtures-row">
+      <span class="meta">Amostras reais do corpus (fonte literal):</span>
+      ${fixturesHtml}
+    </div>
     <textarea id="paste-text" placeholder="https://www.cifraclub.com.br/artista/musica/&#10;&#10;Tom: C&#10;A&#10;| Cmaj7 | Dm7 G7 | Cmaj7 |"></textarea>
+    <div id="source-preview" class="source-preview" hidden></div>
     <p id="paste-error" class="status" hidden></p>
-    <div class="inline-actions"><button class="btn primary" type="button" data-action="apply-paste">Aplicar</button><button class="btn ghost" type="button" data-action="close-modal">Cancelar</button></div>
+    <div class="inline-actions">
+      <button class="btn secondary" type="button" data-action="inspect-source">Inspecionar fonte</button>
+      <button class="btn primary" type="button" data-action="apply-paste">Aplicar</button>
+      <button class="btn ghost" type="button" data-action="close-modal">Cancelar</button>
+    </div>
   </div>`);
   document.querySelector("#paste-text")?.focus();
+}
+
+function loadFixture(fixtureId) {
+  const fixture = ALL_SIX_FIXTURES.find((f) => f.id === fixtureId);
+  if (!fixture) return;
+  const textarea = document.querySelector("#paste-text");
+  if (textarea) {
+    textarea.value = fixture.raw;
+  }
+  inspectSource();
+}
+
+function inspectSource() {
+  const raw = document.querySelector("#paste-text")?.value || "";
+  const previewEl = document.querySelector("#source-preview");
+  if (!previewEl) return;
+  if (!raw.trim()) {
+    previewEl.hidden = true;
+    previewEl.innerHTML = "";
+    return;
+  }
+
+  const source = parseCifraSource(raw);
+  const inv = verifyCifraSourceInvariants(source);
+
+  const metaParts = [];
+  if (source.metadata.title) metaParts.push(`<strong>Título:</strong> ${esc(source.metadata.title)}`);
+  if (source.metadata.artist) metaParts.push(`<strong>Artista:</strong> ${esc(source.metadata.artist)}`);
+  if (source.metadata.composer) metaParts.push(`<strong>Compositor:</strong> ${esc(source.metadata.composer)}`);
+  if (source.metadata.key) metaParts.push(`<strong>Tom:</strong> ${esc(source.metadata.key)}`);
+
+  const blocksHtml = source.blocks.map((block) => {
+    let badgeClass = "badge";
+    let badgeLabel = `Seção: ${esc(block.label || "")}`;
+    if (block.kind === "tab") {
+      badgeClass = "badge tab";
+      badgeLabel = `Tablatura: ${esc(block.label || "Tab")}`;
+    } else if (block.kind === "anonymous") {
+      badgeClass = "badge anon";
+      badgeLabel = "Bloco anônimo";
+    }
+
+    const chordsInBlock = block.lines.flatMap((l) => l.chords);
+    const chordsStr = chordsInBlock.map((c) => esc(c.raw)).join(" ");
+
+    return `<div class="source-block-card">
+      <div><span class="${badgeClass}">${badgeLabel}</span> <small class="meta">${block.lines.length} linha(s), ${chordsInBlock.length} acorde(s)</small></div>
+      ${chordsStr ? `<div class="source-chords-list">${chordsStr}</div>` : ""}
+    </div>`;
+  }).join("");
+
+  previewEl.hidden = false;
+  previewEl.innerHTML = `
+    <h3>Fonte Literal Extraída</h3>
+    <p class="meta">${metaParts.join(" · ") || "Metadados não informados"}</p>
+    <p class="meta"><strong>Total:</strong> ${source.blocks.length} bloco(s), ${source.allChords.length} acorde(s) literais. ${inv.valid ? "✓ Invariantes válidos" : "⚠ Invariantes com aviso"}</p>
+    <div>${blocksHtml}</div>
+  `;
 }
 
 function chartHasChords(song) {

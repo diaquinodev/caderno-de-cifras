@@ -575,6 +575,8 @@ body.clean .video-dock { display: none; }
 }
 .modal {
   width: min(640px, 100%);
+  max-height: min(90dvh, 800px);
+  overflow-y: auto;
   background: var(--paper);
   color: var(--ink);
   padding: 22px;
@@ -1067,4 +1069,61 @@ body.clean .pdf-read { height: 100dvh; }
   }
   .ending-rule { background: #000 !important; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
   .pdf-read, .pdf-canvas { height: 100vh; }
+}
+
+/* Fonte Literal de Cifra */
+.fixtures-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 10px 0;
+}
+.fixtures-row .meta {
+  font-size: 13px;
+  width: 100%;
+  margin-bottom: 2px;
+}
+.fixtures-row button {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.source-preview {
+  margin-top: 12px;
+  padding: 12px;
+  background: rgba(16, 11, 8, 0.04);
+  border: 1px solid var(--line);
+  font-size: 14px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.source-preview h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+.source-block-card {
+  padding: 6px 8px;
+  margin-top: 6px;
+  background: #fff;
+  border: 1px solid var(--line);
+}
+.source-block-card .badge {
+  display: inline-block;
+  padding: 2px 6px;
+  font-size: 11px;
+  background: var(--ink);
+  color: var(--paper);
+  margin-right: 6px;
+}
+.source-block-card .badge.tab {
+  background: #b25d2e;
+}
+.source-block-card .badge.anon {
+  background: #6a6a6a;
+}
+.source-chords-list {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--ink);
+  margin-top: 4px;
 }
