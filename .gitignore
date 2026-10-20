@@ -1,0 +1,34 @@
+# Dependencies and local tooling
+node_modules/
+.netlify/
+.worktrees/
+
+# Local environment and logs
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Generated test output
+coverage/
+playwright-report/
+test-results/
+
+# Research material and temporary probes outside the product
+rea/
+alvo/
+alvos/
+tmp-*
+
+# Local rehearsal material; explicit fixtures may be versioned later
+*.aac
+*.m4a
+*.mp3
+*.pdf
+*.wav
+!test/fixtures/**/*.pdf
+!tests/fixtures/**/*.pdf

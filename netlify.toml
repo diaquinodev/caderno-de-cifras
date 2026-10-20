@@ -1,0 +1,20 @@
+[build]
+publish = "caderno"
+
+[functions]
+directory = "netlify/functions"
+
+[[edge_functions]]
+  function = "cifra"
+  path = "/api/cifra"
+
+[[redirects]]
+from = "/api/acervo"
+to = "/.netlify/functions/acervo"
+status = 200
+
+[[redirects]]
+from = "/leitura/*"
+to = "https://www.cifraclub.com.br/:splat"
+status = 200
+force = true

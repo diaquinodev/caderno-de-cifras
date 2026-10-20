@@ -1,0 +1,25 @@
+{
+  "name": "caderno-de-cifras",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "npm run syntax && npm run lint && npm run typecheck && npm test",
+    "syntax": "node scripts/check-syntax.mjs",
+    "lint": "eslint caderno/js caderno/serve.mjs netlify scripts",
+    "typecheck": "tsc --project jsconfig.json",
+    "test": "node --test caderno/js/*.test.js",
+    "start": "node caderno/serve.mjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^11.1.4"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.5",
+    "@types/punycode": "^2.1.4",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0",
+    "typescript": "^7.0.2"
+  }
+}
