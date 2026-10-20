@@ -702,7 +702,7 @@ function viewSong() {
     <div class="sheet-tools no-print">
       ${fieldSelect("key", "Tom", keyOptions(song.key), song.key)}
       ${fieldInput("tempo", "Tempo", song.tempo, "class=\"tempo\" inputmode=\"numeric\"")}
-      ${fieldSelect("timeSignature", "Compasso", TIME_SIGNATURES.map((value) => `<option${value === song.timeSignature ? " selected" : ""}>${esc(value)}</option>`).join(""), song.timeSignature)}
+      ${fieldSelect("timeSignature", "Compasso", `<option value=""${!song.timeSignature ? " selected" : ""}>Sem compasso</option>` + TIME_SIGNATURES.map((value) => `<option${value === song.timeSignature ? " selected" : ""}>${esc(value)}</option>`).join(""), song.timeSignature)}
       ${fieldSelect("barsPerRow", "Barra", [[8, "Meia"], [4, "Normal"], [2, "Dupla"]].map(([value, label]) => `<option value="${value}"${value === song.barsPerRow ? " selected" : ""}>${label}</option>`).join(""))}
       <button class="btn ghost" type="button" data-action="add-line">Linha</button>
       <button class="btn ghost" type="button" data-action="add-section">Seção</button>
@@ -805,7 +805,8 @@ function paintPaper(focusId) {
   if (!song || !paper) return;
   const editable = state.route.name === "song" && !state.previewKey;
   const sections = editable ? song.sections : transposeSections(song.sections, song.key, state.previewKey);
-  const [beats, unit] = String(song.timeSignature || "4/4").split("/");
+  const hasTime = Boolean(song.timeSignature && /^\d+\/\d+$/.test(song.timeSignature));
+  const [beats, unit] = hasTime ? song.timeSignature.split("/") : ["", ""];
   let bar = 1;
   let firstLine = true;
   const lastSection = sections[sections.length - 1];
@@ -825,7 +826,7 @@ function paintPaper(focusId) {
          </div>`
       : "";
     const lines = rows.map((row, rowIndex) => {
-      const showTime = firstLine;
+      const showTime = firstLine && hasTime;
       firstLine = false;
       const isLastLine = section === lastSection && rowIndex === rows.length - 1;
       const cells = row.map((measure, index) => {
