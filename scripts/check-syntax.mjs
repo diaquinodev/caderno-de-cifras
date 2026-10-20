@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { extname, join } from "node:path";
 
-const roots = ["caderno/js", "netlify", "scripts"];
+const roots = ["caderno/js", "netlify", "scripts", "tests"];
 const extensions = new Set([".js", ".mjs"]);
 
 function collect(directory) {
@@ -13,7 +13,7 @@ function collect(directory) {
   });
 }
 
-const files = [...roots.flatMap(collect), "caderno/serve.mjs"];
+const files = [...roots.flatMap(collect), "caderno/serve.mjs", "playwright.config.js"];
 
 for (const file of files) {
   const result = spawnSync(process.execPath, ["--check", file], { stdio: "inherit" });
