@@ -937,4 +937,51 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     await expect(page.locator("canvas.pdf-canvas")).toHaveAttribute("data-physical-page", "5");
     expect(errors).toEqual([]);
   });
+  test("fase 7: carregar as seis fixtures e exibir fonte literal sem criar Song antecipadamente", async ({ page }) => {
+    const errors = await setupPage(page, { seedPdf: false });
+    await gotoRoute(page, "#/musicas");
+
+    // Confere contagem inicial de musicas
+    const initialSongs = await page.locator("#list button[data-action='open-song'], #list a").count();
+
+    // Abre modal de colar cifra diretamente a partir da criacao de musica
+    await page.click('[data-action="new-song"]');
+    await page.click('[data-action="open-paste"]');
+    await expect(page.locator("#paste-title")).toBeVisible();
+
+    const preview = page.locator("#source-preview");
+
+    // 1. Testa Fixture 1: So Easy
+    await page.click('[data-action="load-fixture"][data-fixture-id="so-easy"]');
+    await expect(preview).toBeVisible();
+    await expect(preview).toContainText("So Easy (To Fall In Love)");
+    await expect(preview).toContainText("Tom: C");
+    await expect(preview).toContainText("Seção: Intro");
+    await expect(preview).toContainText("Seção: Refrão");
+
+    // 2. Testa Fixture 4: Aguas de Marco (deve identificar bloco anonimo)
+    await page.click('[data-action="load-fixture"][data-fixture-id="aguas-de-marco"]');
+    await expect(preview).toContainText("Águas de Março");
+    await expect(preview).toContainText("Tom: Bb");
+    await expect(preview).toContainText("Bloco anônimo");
+
+    // 3. Testa Fixture 6: Samba de Uma Nota So (deve identificar tablatura)
+    await page.click('[data-action="load-fixture"][data-fixture-id="samba-de-uma-nota-so"]');
+    await expect(preview).toContainText("Samba de Uma Nota Só");
+    await expect(preview).toContainText("Tom: D");
+    await expect(preview).toContainText("Tablatura: Tab - Intro");
+
+    // Fecha modal sem aplicar
+    const closeBtn = page.locator('.modal [data-action="close-modal"]');
+    await closeBtn.scrollIntoViewIfNeeded();
+    await closeBtn.click();
+    await expect(page.locator("#paste-title")).not.toBeVisible();
+
+    // Retorna a biblioteca e confirma que nenhuma musica foi criada
+    await gotoRoute(page, "#/musicas");
+    const finalSongs = await page.locator("#list button[data-action='open-song'], #list a").count();
+    expect(finalSongs).toBe(initialSongs);
+
+    expect(errors).toEqual([]);
+  });
 });
