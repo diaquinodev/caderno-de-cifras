@@ -1,0 +1,77 @@
+{
+  "source": {
+    "origin": "https://www.cifraclub.com.br",
+    "pathname": "/jorge-ben-jor/oba-la-vem-ela/",
+    "observedAt": "2026-10-21T12:51:13.303Z",
+    "method": "DOM renderizado em sessão local autorizada do Chrome"
+  },
+  "evidence": [
+    {
+      "field": "page",
+      "selectorCandidates": ["html[data-chord-page]"],
+      "sampleShape": "elemento html com data-chord-page",
+      "observed": true
+    },
+    {
+      "field": "title",
+      "selectorCandidates": ["div[data-chord-select] > h1"],
+      "sampleShape": "h1 com texto curto",
+      "observed": "Oba Lá Vem Ela"
+    },
+    {
+      "field": "artist",
+      "selectorCandidates": ["div[data-chord-select] h2", "div[data-chord-select] h2.closest('a')"],
+      "sampleShape": "h2 dentro do link do artista",
+      "observed": "Jorge Ben Jor"
+    },
+    {
+      "field": "key",
+      "selectorCandidates": ["[data-chord-config]"],
+      "sampleShape": "rótulo Tom: seguido pelo valor",
+      "observed": "Bm"
+    },
+    {
+      "field": "content",
+      "selectorCandidates": ["article[data-chord-container]", "pre[data-chord-content]"],
+      "sampleShape": "article > pre > div",
+      "observed": true
+    },
+    {
+      "field": "chords",
+      "selectorCandidates": ["pre[data-chord-content] b[data-chord-name]"],
+      "sampleShape": "b[data-chord-name][data-chord-index]",
+      "observed": {
+        "count": 74,
+        "unique": ["Bm7", "Em7", "A7", "A#°"],
+        "sequenceSeparator": "|",
+        "sequenceSha256": "bd171424e79b19903ca9575cfc6f1506a83e5ff7b6e85514e0f8dea2fb6e8a4d"
+      }
+    },
+    {
+      "field": "rows",
+      "selectorCandidates": ["pre[data-chord-content] > div"],
+      "sampleShape": "div contendo zero ou mais b[data-chord-name]",
+      "observed": {
+        "count": 33,
+        "chordCounts": [6, 1, 2, 2, 3, 2, 2, 2, 2, 1, 2, 2, 3, 1, 2, 3, 4, 1, 2, 2, 3, 2, 2, 1, 1, 2, 2, 1, 2, 2, 3, 4, 4]
+      }
+    },
+    {
+      "field": "sections",
+      "selectorCandidates": ["pre[data-chord-content] b[data-chord-original-trailing]"],
+      "sampleShape": "marcador [Seção] no texto posterior ao acorde e em data-chord-original-trailing",
+      "observed": ["Refrão", "Primeira Parte", "Refrão", "Segunda Parte", "Refrão", "Terceira Parte", "Refrão"]
+    },
+    {
+      "field": "tablature",
+      "selectorCandidates": ["pre[data-chord-content] > div"],
+      "sampleShape": "linhas iniciadas por e|, B|, G|, D|, A| e E| ou marcas de técnica",
+      "observed": false
+    }
+  ],
+  "limitations": [
+    "As classes CSS observadas são ofuscadas e não foram adotadas como contrato.",
+    "A ausência de tablatura vale somente para a página amostrada.",
+    "A fixture remove letra, anúncios, scripts, cookies e identificadores de sessão."
+  ]
+}
