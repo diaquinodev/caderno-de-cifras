@@ -3,7 +3,12 @@
   "name": "Caderno de Cifras Clipper",
   "version": "0.1.0",
   "description": "Prepara uma cifra aberta pelo usuário para revisão no Caderno de Cifras.",
+  "permissions": ["activeTab", "scripting"],
   "action": {
     "default_title": "Enviar ao Caderno de Cifras"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
   }
 }

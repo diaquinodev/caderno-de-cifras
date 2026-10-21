@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extractDomSnapshot } from "../extension/dom-adapter.js";
 import { extractCanonicalCifra } from "../extension/extractor.js";
+import { registerActionListener } from "../extension/background.js";
 import { parseCifraSource, verifyCifraSourceInvariants } from "../caderno/js/source.js";
 
 const fixtureUrl = new URL("./fixtures/cifraclub-oba-la-vem-ela.sanitized.html", import.meta.url);
@@ -12,7 +13,7 @@ function evidenceFor(document, field) {
   return document.evidence.find((item) => item.field === field);
 }
 
-test.describe("Caderno Clipper - Fase 3: Adaptador do DOM", () => {
+test.describe("Caderno Clipper - DOM e Extensão Mínima", () => {
   test("carrega a fixture sanitizada no navegador e confirma metadados, blocos e acordes", async ({ page }) => {
     const [html, evidenceDoc] = await Promise.all([
       readFile(fixtureUrl, "utf8"),
@@ -92,5 +93,46 @@ test.describe("Caderno Clipper - Fase 3: Adaptador do DOM", () => {
       expect(missingSelector.error.code).toBe("DOM_STRUCTURE_CHANGED");
     }
     expect("snapshot" in missingSelector).toBe(false);
+  });
+
+  test("fase 4: extensão mínima executa somente após o clique na aba ativa", async ({ page }) => {
+    const html = await readFile(fixtureUrl, "utf8");
+    await page.setContent(html);
+
+    let clickedHandler = null;
+    let scriptExecutions = 0;
+
+    const chromeBridge = {
+      action: {
+        onClicked: {
+          addListener(fn) {
+            clickedHandler = fn;
+          },
+        },
+      },
+      scripting: {
+        async executeScript({ target, func }) {
+          scriptExecutions += 1;
+          expect(target.tabId).toBe(101);
+          const result = await page.evaluate(func);
+          return [{ result }];
+        },
+      },
+    };
+
+    registerActionListener(chromeBridge);
+    expect(scriptExecutions).toBe(0);
+
+    const clipperResult = await clickedHandler({ id: 101 });
+    expect(scriptExecutions).toBe(1);
+    expect(clipperResult.ok).toBe(true);
+    if (!clipperResult.ok) return;
+
+    expect(clipperResult.chordCount).toBe(74);
+    expect(clipperResult.metadata).toEqual({
+      title: "Oba Lá Vem Ela",
+      artist: "Jorge Ben Jor",
+      key: "Bm",
+    });
   });
 });
