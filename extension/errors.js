@@ -84,7 +84,7 @@ export async function applyActionFeedback(tabId, status, chromeApi = /** @type {
 
   const badgeText = status.ok ? "OK" : "ERR";
   const badgeColor = status.ok ? "#1f7a4c" : "#b91c1c";
-  const tooltip = status.ok
+  const tooltip = "title" in status
     ? status.title
     : `Falha (${status.error.code}): ${status.error.message}`;
 
