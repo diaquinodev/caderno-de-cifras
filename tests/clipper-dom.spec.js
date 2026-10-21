@@ -13,7 +13,7 @@ function evidenceFor(document, field) {
   return document.evidence.find((item) => item.field === field);
 }
 
-test.describe("Caderno Clipper - DOM e Extensão Mínima", () => {
+test.describe("Caderno Clipper - DOM, Extensão e Entrega ao Caderno", () => {
   test("carrega a fixture sanitizada no navegador e confirma metadados, blocos e acordes", async ({ page }) => {
     const [html, evidenceDoc] = await Promise.all([
       readFile(fixtureUrl, "utf8"),
@@ -95,12 +95,20 @@ test.describe("Caderno Clipper - DOM e Extensão Mínima", () => {
     expect("snapshot" in missingSelector).toBe(false);
   });
 
-  test("fase 4: extensão mínima executa somente após o clique na aba ativa", async ({ page }) => {
+  test("fases 4 e 5: clique na extensão copia cifra canônica, abre o Caderno e gera rascunho preservando os 74 acordes", async ({
+    page,
+    context,
+  }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     const html = await readFile(fixtureUrl, "utf8");
+    await page.goto("http://127.0.0.1:4173/#/musicas");
     await page.setContent(html);
 
     let clickedHandler = null;
     let scriptExecutions = 0;
+    const openedUrls = [];
+    /** @type {import("@playwright/test").Page | null} */
+    let cadernoPage = null;
 
     const chromeBridge = {
       action: {
@@ -109,30 +117,63 @@ test.describe("Caderno Clipper - DOM e Extensão Mínima", () => {
             clickedHandler = fn;
           },
         },
+        async setBadgeText() {},
+        async setBadgeBackgroundColor() {},
+        async setTitle() {},
       },
       scripting: {
-        async executeScript({ target, func }) {
+        async executeScript({ target, func, args }) {
           scriptExecutions += 1;
           expect(target.tabId).toBe(101);
-          const result = await page.evaluate(func);
+          const result = Array.isArray(args)
+            ? await page.evaluate(func, ...args)
+            : await page.evaluate(func);
           return [{ result }];
+        },
+      },
+      tabs: {
+        async create({ url }) {
+          openedUrls.push(url);
+          cadernoPage = await context.newPage();
+          await cadernoPage.goto(url);
+          return { id: 102, url };
         },
       },
     };
 
-    registerActionListener(chromeBridge);
+    registerActionListener(chromeBridge, { destination: "http://127.0.0.1:4173/#/musicas" });
     expect(scriptExecutions).toBe(0);
 
     const clipperResult = await clickedHandler({ id: 101 });
-    expect(scriptExecutions).toBe(1);
+    expect(scriptExecutions).toBe(2);
     expect(clipperResult.ok).toBe(true);
-    if (!clipperResult.ok) return;
+    if (!clipperResult.ok || !cadernoPage) return;
 
     expect(clipperResult.chordCount).toBe(74);
-    expect(clipperResult.metadata).toEqual({
-      title: "Oba Lá Vem Ela",
-      artist: "Jorge Ben Jor",
-      key: "Bm",
-    });
+    expect(clipperResult.receipt.destination).toBe("http://127.0.0.1:4173/#/musicas");
+    expect(clipperResult.receipt.confirmationMessage).toContain("Oba Lá Vem Ela (74 acordes)");
+    expect(openedUrls).toEqual(["http://127.0.0.1:4173/#/musicas"]);
+
+    const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clipboardText.replace(/\r\n/g, "\n")).toBe(clipperResult.text);
+
+    // Na aba aberta do Caderno, cola o texto do clipboard, inspeciona a fonte e gera o rascunho
+    await cadernoPage.click('[data-action="new-song"]');
+    await cadernoPage.click('[data-action="open-paste"]');
+    await cadernoPage.fill("#paste-text", clipboardText);
+    await cadernoPage.click('[data-action="inspect-source"]');
+
+    const preview = cadernoPage.locator("#source-preview");
+    await expect(preview).toBeVisible();
+    await expect(preview).toContainText("Oba Lá Vem Ela");
+    await expect(preview).toContainText("Jorge Ben Jor");
+    await expect(preview).toContainText("Tom: Bm");
+    await expect(preview).toContainText("Total: 8 bloco(s), 74 acorde(s) literais.");
+
+    await cadernoPage.click('[data-action="open-draft"]');
+    await expect(cadernoPage.locator("#draft-title")).toBeVisible();
+    await expect(cadernoPage.locator(".modal")).toContainText("Oba Lá Vem Ela");
+    await expect(cadernoPage.locator(".modal")).toContainText("Tom: Bm");
+    await cadernoPage.close();
   });
 });

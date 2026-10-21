@@ -1,8 +1,10 @@
 import { extractDomSnapshot } from "./dom-adapter.js";
 import { extractCanonicalCifra } from "./extractor.js";
+import { deliverToCaderno } from "./delivery.js";
 
 /**
  * @typedef {import("./extractor.js").ClipperMetadata} ClipperMetadata
+ * @typedef {import("./delivery.js").DeliveryReceipt} DeliveryReceipt
  */
 
 /**
@@ -12,19 +14,20 @@ import { extractCanonicalCifra } from "./extractor.js";
  */
 
 /**
- * @typedef {{ ok: true, text: string, chordCount: number, metadata: ClipperMetadata } |
+ * @typedef {{ ok: true, text: string, chordCount: number, metadata: ClipperMetadata, receipt: DeliveryReceipt } |
  *   { ok: false, error: ClipperResultError }} ClipperResult
  */
 
 /**
- * Executes the DOM adapter on the active tab upon user click and converts
- * the snapshot into canonical Cifra text.
+ * Executes the DOM adapter on the active tab upon user click, converts
+ * the snapshot into canonical Cifra text, copies it to the clipboard, and opens the Caderno.
  *
  * @param {{ id?: number } | null | undefined} tab
  * @param {any} [chromeApi]
+ * @param {{ destination?: string }} [options]
  * @returns {Promise<ClipperResult>}
  */
-export async function runClipperForTab(tab, chromeApi = /** @type {any} */ (globalThis).chrome) {
+export async function runClipperForTab(tab, chromeApi = /** @type {any} */ (globalThis).chrome, options = {}) {
   if (!tab || typeof tab.id !== "number") {
     return {
       ok: false,
@@ -83,11 +86,31 @@ export async function runClipperForTab(tab, chromeApi = /** @type {any} */ (glob
     };
   }
 
+  const delivery = await deliverToCaderno(
+    {
+      ok: true,
+      text: extracted.text,
+      chordCount: extracted.chordCount,
+      metadata: domResult.snapshot.metadata,
+    },
+    tab,
+    chromeApi,
+    options,
+  );
+
+  if (!delivery.ok) {
+    return {
+      ok: false,
+      error: delivery.error,
+    };
+  }
+
   return {
     ok: true,
     text: extracted.text,
     chordCount: extracted.chordCount,
     metadata: domResult.snapshot.metadata,
+    receipt: delivery.receipt,
   };
 }
 
@@ -96,11 +119,12 @@ export async function runClipperForTab(tab, chromeApi = /** @type {any} */ (glob
  * Nothing runs automatically on page load; extraction only starts after user gesture.
  *
  * @param {any} [chromeApi]
+ * @param {{ destination?: string }} [options]
  * @returns {((tab: { id?: number }) => Promise<ClipperResult>) | null}
  */
-export function registerActionListener(chromeApi = /** @type {any} */ (globalThis).chrome) {
+export function registerActionListener(chromeApi = /** @type {any} */ (globalThis).chrome, options = {}) {
   if (!chromeApi?.action?.onClicked?.addListener) return null;
-  const listener = async (tab) => runClipperForTab(tab, chromeApi);
+  const listener = async (tab) => runClipperForTab(tab, chromeApi, options);
   chromeApi.action.onClicked.addListener(listener);
   return listener;
 }
