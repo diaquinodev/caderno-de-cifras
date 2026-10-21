@@ -1,4 +1,3 @@
-import { requestCifraApi } from "./api.js";
 import {
   suggestChart,
   verifyDraftInvariants as verifyDraftInvariantsOriginal,
@@ -1348,6 +1347,31 @@ function isYoutubeUrl(value) {
   return false;
 }
 
+function clearPasteError() {
+  const note = document.querySelector("#paste-error");
+  if (note) {
+    note.hidden = true;
+    note.textContent = "";
+  }
+}
+
+function explainIsolatedUrl(trimmed) {
+  const link = pastedCifraLink(trimmed);
+  if (link) {
+    pasteError(
+      "A importação direta por URL foi substituída pela extensão local Caderno Clipper (o servidor recebe bloqueio automatizado). Abra a cifra no navegador, clique no ícone da extensão Caderno Clipper — ou copie os acordes da página — e cole o texto aqui."
+    );
+    return;
+  }
+  if (isYoutubeUrl(trimmed)) {
+    pasteError("O YouTube não entrega o áudio para o Caderno. Use um arquivo da música em Analisar áudio.");
+    return;
+  }
+  pasteError(
+    "O endereço informado não é um link válido do Cifra Club. Abra uma cifra no navegador, use a extensão Caderno Clipper (ou copie os acordes) e cole o texto aqui."
+  );
+}
+
 function openPaste() {
   const fixturesHtml = ALL_SIX_FIXTURES.map(
     (f) => `<button type="button" class="btn ghost small" data-action="load-fixture" data-fixture-id="${esc(f.id)}">${esc(f.name)}</button>`
@@ -1355,12 +1379,12 @@ function openPaste() {
 
   openModal(`<div class="modal" role="dialog" aria-modal="true" aria-labelledby="paste-title">
     <h2 id="paste-title">Colar cifra</h2>
-    <p>Cole um link do Cifra Club, os acordes da cifra ou um mapa com barras. A letra não entra na cifra. <code>|:</code> e <code>:|</code> marcam repetição, <code>[1]</code> e <code>[2]</code> marcam as casas.</p>
+    <p>Use a extensão local <strong>Caderno Clipper</strong> na aba aberta do Cifra Club para copiar a estrutura musical em um clique, ou copie e cole manualmente os acordes da página (ou um mapa com barras). A letra não entra na cifra. <code>|:</code> e <code>:|</code> marcam repetição, <code>[1]</code> e <code>[2]</code> marcam as casas.</p>
     <div class="fixtures-row">
       <span class="meta">Amostras reais do corpus (fonte literal):</span>
       ${fixturesHtml}
     </div>
-    <textarea id="paste-text" placeholder="https://www.cifraclub.com.br/artista/musica/&#10;&#10;Tom: C&#10;A&#10;| Cmaj7 | Dm7 G7 | Cmaj7 |"></textarea>
+    <textarea id="paste-text" placeholder="Título: Oba Lá Vem Ela&#10;Artista: Jorge Ben Jor&#10;Tom: Bm&#10;&#10;[Refrão]&#10;Bm7 Em7&#10;&#10;Ou um mapa com barras:&#10;| Cmaj7 | Dm7 G7 | Cmaj7 |"></textarea>
     <div id="source-preview" class="source-preview" hidden></div>
     <p id="paste-error" class="status" hidden></p>
     <div class="inline-actions">
@@ -1386,12 +1410,20 @@ function inspectSource() {
   const raw = document.querySelector("#paste-text")?.value || "";
   const previewEl = document.querySelector("#source-preview");
   if (!previewEl) return;
-  if (!raw.trim()) {
+  const trimmed = raw.trim();
+  if (!trimmed) {
     previewEl.hidden = true;
     previewEl.innerHTML = "";
     return;
   }
+  if (/^https?:\/\/\S+$/i.test(trimmed)) {
+    previewEl.hidden = true;
+    previewEl.innerHTML = "";
+    explainIsolatedUrl(trimmed);
+    return;
+  }
 
+  clearPasteError();
   const source = parseCifraSource(raw);
   const inv = verifyCifraSourceInvariants(source);
 
@@ -1434,30 +1466,21 @@ function inspectSource() {
 async function openDraft() {
   const raw = document.querySelector("#paste-text")?.value || "";
   if (!raw.trim()) {
-    pasteError("Cole uma cifra ou link antes de gerar o rascunho.");
+    pasteError("Cole o texto da cifra (via Caderno Clipper ou cópia manual) antes de gerar o rascunho.");
     return;
   }
   const trimmed = raw.trim();
-  if (/^https?:\/\//i.test(trimmed)) {
-    const link = pastedCifraLink(trimmed);
-    if (!link) {
-      pasteError("O endereço informado não é um link válido do Cifra Club.");
-      return;
-    }
-    toast("Consultando Cifra Club via API...");
-    const res = await requestCifraApi(link);
-    if (!res.ok) {
-      pasteError(res.error?.message || "Não consegui ler esse link.");
-      return;
-    }
-    state.draftHistory = [];
-    state.draftActiveTab = "chart";
-    state.currentDraft = suggestChart(res.source);
-    renderDraftModal();
+  if (/^https?:\/\/\S+$/i.test(trimmed)) {
+    explainIsolatedUrl(trimmed);
     return;
   }
+  clearPasteError();
   try {
     const source = parseCifraSource(raw);
+    if (!source.allChords.length) {
+      pasteError("Nenhum acorde reconhecível foi encontrado no texto colado.");
+      return;
+    }
     state.draftHistory = [];
     state.draftActiveTab = "chart";
     state.currentDraft = suggestChart(source);
@@ -1759,21 +1782,15 @@ function pasteError(message) {
   toast(message);
 }
 
-async function applyCifraLink(song, link) {
-  toast("Consultando Cifra Club via API...");
-  const res = await requestCifraApi(link);
-  if (!res.ok) {
-    pasteError(res.error?.message || "Não consegui ler esse link.");
-    return;
-  }
-  state.currentDraft = suggestChart(res.source);
-  renderDraftModal();
-}
-
 async function applyPaste() {
   const song = currentSong();
   if (!song) return;
   const raw = document.querySelector("#paste-text")?.value || "";
+  const trimmed = raw.trim();
+  if (/^https?:\/\/\S+$/i.test(trimmed)) {
+    explainIsolatedUrl(trimmed);
+    return;
+  }
   const parsed = parseChartText(raw);
   const plain = parsed.sections.length ? null : chartFromCifraPlain(raw);
   if (parsed.sections.length || plain?.sections.length) {
@@ -1784,16 +1801,7 @@ async function applyPaste() {
     writeParsedChart(song, parsed.sections.length ? parsed : plain, false);
     return;
   }
-  const link = pastedCifraLink(raw);
-  if (link) {
-    await applyCifraLink(song, link);
-    return;
-  }
-  if (isYoutubeUrl(raw.trim())) {
-    toast("O YouTube não entrega o áudio para o Caderno. Use um arquivo da música em Analisar áudio.");
-    return;
-  }
-  toast("Não encontrei compassos. Cole o link do Cifra Club, os acordes ou um mapa com barras.");
+  toast("Não encontrei compassos. Use a extensão Caderno Clipper, cole os acordes ou um mapa com barras.");
 }
 
 function openPicker(kind, id) {
