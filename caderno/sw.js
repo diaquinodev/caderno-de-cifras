@@ -1,10 +1,10 @@
-const CACHE_NAME = "caderno-v1";
+const CACHE_NAME = "caderno-v2";
 
 const PRECACHE_ASSETS = [
   "./",
   "./index.html",
   "./css/app.css?v=4",
-  "./js/app.js?v=4",
+  "./js/app.js?v=5",
   "./js/acervo.js",
   "./js/backup.js",
   "./js/chords.js",
