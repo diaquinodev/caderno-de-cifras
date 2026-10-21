@@ -74,3 +74,47 @@ test("código da extensão não lê cookies, tokens nem executa chamadas de rede
     }
   }
 });
+
+test("fase 8: produto não possui mais rota /api/cifra, requestCifraApi nem fetchCifraSource", async () => {
+  const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+
+  async function collectFiles(dir) {
+    const entries = await readdir(dir, { withFileTypes: true });
+    const files = [];
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "vendor" || entry.name === "node_modules" || entry.name === "tests") continue;
+        files.push(...(await collectFiles(fullPath)));
+      } else if (/\.(js|mjs|toml|html|json)$/.test(entry.name) && !entry.name.endsWith(".test.js")) {
+        files.push(fullPath);
+      }
+    }
+    return files;
+  }
+
+  const productFiles = [
+    ...(await collectFiles(join(repoRoot, "caderno"))),
+    ...(await collectFiles(join(repoRoot, "extension"))),
+    ...(await collectFiles(join(repoRoot, "netlify"))),
+    join(repoRoot, "netlify.toml"),
+  ];
+
+  const legacyPatterns = [
+    /\/api\/cifra\b/,
+    /\brequestCifraApi\b/,
+    /\bfetchCifraSource\b/,
+  ];
+
+  for (const file of productFiles) {
+    const content = await readFile(file, "utf8");
+    for (const pattern of legacyPatterns) {
+      assert.doesNotMatch(
+        content,
+        pattern,
+        `Referência legada ${pattern} encontrada em ${file}`,
+      );
+    }
+  }
+});
+

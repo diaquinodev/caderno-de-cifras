@@ -36,8 +36,4 @@ export default [
     files: ["tests/**/*.js", "extension/**/*.test.js"],
     languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
-  {
-    files: ["netlify/edge-functions/**/*.js"],
-    languageOptions: { globals: globals.worker },
-  },
 ];

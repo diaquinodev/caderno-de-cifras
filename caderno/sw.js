@@ -6,7 +6,6 @@ const PRECACHE_ASSETS = [
   "./css/app.css?v=4",
   "./js/app.js?v=4",
   "./js/acervo.js",
-  "./js/api.js",
   "./js/backup.js",
   "./js/chords.js",
   "./js/cifra.js",
