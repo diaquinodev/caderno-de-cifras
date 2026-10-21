@@ -76,12 +76,12 @@ export async function runClipperForTab(tab, chromeApi = /** @type {any} */ (glob
   }
 
   const extracted = extractCanonicalCifra(domResult.snapshot);
-  if (!extracted.ok) {
+  if (!extracted.ok || !("text" in extracted)) {
     return {
       ok: false,
       error: {
-        code: extracted.error,
-        message: extracted.message,
+        code: "error" in extracted ? extracted.error : "DOM_STRUCTURE_CHANGED",
+        message: "message" in extracted ? extracted.message : "Falha ao extrair cifra.",
       },
     };
   }
@@ -98,10 +98,12 @@ export async function runClipperForTab(tab, chromeApi = /** @type {any} */ (glob
     options,
   );
 
-  if (!delivery.ok) {
+  if (!delivery.ok || !("receipt" in delivery)) {
     return {
       ok: false,
-      error: delivery.error,
+      error: "error" in delivery
+        ? delivery.error
+        : { code: "TAB_OPEN_FAILED", message: "Falha ao abrir o Caderno." },
     };
   }
 
