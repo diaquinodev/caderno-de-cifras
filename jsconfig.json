@@ -17,5 +17,6 @@
     "caderno/js/forms.js",
     "caderno/js/listen.js",
     "caderno/js/store.js"
-  ]
+  ],
+  "include": ["extension/**/*.js"]
 }

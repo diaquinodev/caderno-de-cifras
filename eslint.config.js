@@ -10,6 +10,7 @@ export default [
     files: [
       "caderno/js/**/*.js",
       "caderno/*.mjs",
+      "extension/**/*.js",
       "netlify/**/*.{js,mjs}",
       "scripts/*.mjs",
       "tests/**/*.js",
@@ -24,7 +25,7 @@ export default [
     },
   },
   {
-    files: ["caderno/js/**/*.js"],
+    files: ["caderno/js/**/*.js", "extension/**/*.js"],
     languageOptions: { globals: globals.browser },
   },
   {
@@ -32,7 +33,7 @@ export default [
     languageOptions: { globals: { ...globals.node, ...globals.worker } },
   },
   {
-    files: ["tests/**/*.js"],
+    files: ["tests/**/*.js", "extension/**/*.test.js"],
     languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
   {
