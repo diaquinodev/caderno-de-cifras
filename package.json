@@ -4,11 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "npm run syntax && npm run lint && npm run typecheck && npm test && npm run test:e2e",
+    "check": "npm run syntax && npm run lint && npm run typecheck && npm run manifest:check && npm test && npm run test:e2e",
     "syntax": "node scripts/check-syntax.mjs",
-    "lint": "eslint caderno/js caderno/serve.mjs netlify scripts tests playwright.config.js",
+    "lint": "eslint caderno/js caderno/serve.mjs extension netlify scripts tests playwright.config.js",
     "typecheck": "tsc --project jsconfig.json",
-    "test": "node --test caderno/js/*.test.js",
+    "manifest:check": "node scripts/validate-extension-manifest.mjs",
+    "test": "node --test caderno/js/*.test.js extension/**/*.test.js",
     "test:e2e": "playwright test",
     "start": "node caderno/serve.mjs"
   },

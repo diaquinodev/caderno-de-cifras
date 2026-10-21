@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { extname, join } from "node:path";
 
-const roots = ["caderno/js", "netlify", "scripts", "tests"];
+const roots = ["caderno/js", "extension", "netlify", "scripts", "tests"];
 const extensions = new Set([".js", ".mjs"]);
 
 function collect(directory) {
