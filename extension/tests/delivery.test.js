@@ -17,7 +17,6 @@ test("isCleanCadernoDestination garante URL de destino sem dados musicais na que
 test("deliverToCaderno copia somente após extração válida, abre o Caderno e gera DeliveryReceipt sem letra", async () => {
   const copiedTexts = [];
   const openedTabs = [];
-  const badgeUpdates = [];
 
   const mockChrome = {
     scripting: {
@@ -32,13 +31,6 @@ test("deliverToCaderno copia somente após extração válida, abre o Caderno e 
         openedTabs.push(url);
         return { id: 99, url };
       },
-    },
-    action: {
-      async setBadgeText(payload) {
-        badgeUpdates.push(payload);
-      },
-      async setBadgeBackgroundColor() {},
-      async setTitle() {},
     },
   };
 
@@ -58,7 +50,6 @@ test("deliverToCaderno copia somente após extração válida, abre o Caderno e 
 
   assert.equal(copiedTexts.length, 1);
   assert.deepEqual(openedTabs, [CADERNO_PRODUCTION_URL]);
-  assert.deepEqual(badgeUpdates, [{ tabId: 11, text: "OK" }]);
   assert.deepEqual(result.receipt, {
     title: "Oba Lá Vem Ela",
     chordCount: 74,

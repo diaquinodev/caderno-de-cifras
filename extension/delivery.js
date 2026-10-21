@@ -1,4 +1,10 @@
+import { createClipperError } from "./errors.js";
+
 export const CADERNO_PRODUCTION_URL = "https://stunning-raindrop-7db7c8.netlify.app/#/musicas";
+
+/**
+ * @typedef {import("./errors.js").ClipperError} ClipperError
+ */
 
 /**
  * @typedef {Object} DeliveryReceipt
@@ -9,13 +15,7 @@ export const CADERNO_PRODUCTION_URL = "https://stunning-raindrop-7db7c8.netlify.
  */
 
 /**
- * @typedef {Object} DeliveryError
- * @property {"CLIPBOARD_DENIED" | "INVALID_DESTINATION" | "TAB_OPEN_FAILED"} code
- * @property {string} message
- */
-
-/**
- * @typedef {{ ok: true, receipt: DeliveryReceipt } | { ok: false, error: DeliveryError }} DeliveryResult
+ * @typedef {{ ok: true, receipt: DeliveryReceipt } | { ok: false, error: ClipperError }} DeliveryResult
  */
 
 /**
@@ -99,13 +99,10 @@ export async function deliverToCaderno(
   chromeApi = /** @type {any} */ (globalThis).chrome,
   options = {},
 ) {
-  if (!extraction || !extraction.ok || !extraction.text || ! extraction.chordCount) {
+  if (!extraction || !extraction.ok || !extraction.text || !extraction.chordCount) {
     return {
       ok: false,
-      error: {
-        code: "CLIPBOARD_DENIED",
-        message: "Extração inválida não pode ser copiada para a área de transferência.",
-      },
+      error: createClipperError("CLIPBOARD_DENIED"),
     };
   }
 
@@ -113,10 +110,7 @@ export async function deliverToCaderno(
   if (!isCleanCadernoDestination(destination)) {
     return {
       ok: false,
-      error: {
-        code: "INVALID_DESTINATION",
-        message: "A URL de destino do Caderno é inválida ou contém parâmetros não permitidos.",
-      },
+      error: createClipperError("INVALID_DESTINATION"),
     };
   }
 
@@ -130,20 +124,14 @@ export async function deliverToCaderno(
   } catch {
     return {
       ok: false,
-      error: {
-        code: "CLIPBOARD_DENIED",
-        message: "Não foi possível copiar a cifra para a área de transferência.",
-      },
+      error: createClipperError("CLIPBOARD_DENIED"),
     };
   }
 
   if (!copyResults?.[0]?.result?.ok) {
     return {
       ok: false,
-      error: {
-        code: "CLIPBOARD_DENIED",
-        message: "Permissão de área de transferência negada na aba ativa.",
-      },
+      error: createClipperError("CLIPBOARD_DENIED"),
     };
   }
 
@@ -154,10 +142,7 @@ export async function deliverToCaderno(
   } catch {
     return {
       ok: false,
-      error: {
-        code: "TAB_OPEN_FAILED",
-        message: "A cifra foi copiada, mas não foi possível abrir a aba do Caderno automaticamente.",
-      },
+      error: createClipperError("TAB_OPEN_FAILED"),
     };
   }
 
@@ -166,16 +151,6 @@ export async function deliverToCaderno(
     title,
     chordCount: extraction.chordCount,
   });
-
-  if (chromeApi?.action?.setBadgeText && typeof tab?.id === "number") {
-    await chromeApi.action.setBadgeText({ tabId: tab.id, text: "OK" });
-    if (chromeApi.action.setBadgeBackgroundColor) {
-      await chromeApi.action.setBadgeBackgroundColor({ tabId: tab.id, color: "#1f7a4c" });
-    }
-    if (chromeApi.action.setTitle) {
-      await chromeApi.action.setTitle({ tabId: tab.id, title: confirmationMessage });
-    }
-  }
 
   return {
     ok: true,
