@@ -73,12 +73,12 @@ export async function runClipperForTab(tab, chromeApi = /** @type {any} */ (glob
   }
 
   const extracted = extractCanonicalCifra(domResult.snapshot);
-  if (!extracted.ok) {
+  if (!extracted.ok || !("text" in extracted)) {
     return {
       ok: false,
       error: {
-        code: extracted.error,
-        message: extracted.message,
+        code: "error" in extracted ? extracted.error : "DOM_STRUCTURE_CHANGED",
+        message: "message" in extracted ? extracted.message : "Falha ao extrair cifra.",
       },
     };
   }
