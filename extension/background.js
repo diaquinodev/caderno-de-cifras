@@ -55,8 +55,8 @@ export async function runClipperForTab(tab, chromeApi = /** @type {any} */ (glob
   }
 
   const extracted = extractCanonicalCifra(domResult.snapshot);
-  if (!extracted.ok) {
-    return fail(extracted.error);
+  if (!extracted.ok || !("text" in extracted)) {
+    return fail("error" in extracted ? extracted.error : "DOM_STRUCTURE_CHANGED");
   }
 
   const delivery = await deliverToCaderno(
@@ -71,11 +71,12 @@ export async function runClipperForTab(tab, chromeApi = /** @type {any} */ (glob
     options,
   );
 
-  if (!delivery.ok) {
-    await applyActionFeedback(tab.id, { ok: false, error: delivery.error }, chromeApi);
+  if (!delivery.ok || !("receipt" in delivery)) {
+    const deliveryError = "error" in delivery ? delivery.error : createClipperError("DELIVERY_FAILED");
+    await applyActionFeedback(tab.id, { ok: false, error: deliveryError }, chromeApi);
     return {
       ok: false,
-      error: delivery.error,
+      error: deliveryError,
     };
   }
 
