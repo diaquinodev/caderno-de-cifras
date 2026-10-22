@@ -14,6 +14,7 @@ import { parseCifraSource } from "../../caderno/js/source.js";
  * @param {string} [options.title]
  * @param {string} [options.artist]
  * @param {string} [options.keyText]
+ * @param {Array<{ name: string, text?: string, index?: string | null }>} [options.auxiliaryBolds]
  * @param {Array<{ nodes: Array<{ type: "b", name?: string, text?: string, index?: string | null, trailing?: string } | { type: "text", text: string }> }>} [options.rows]
  */
 function buildMockDocument(options = {}) {
@@ -24,6 +25,7 @@ function buildMockDocument(options = {}) {
     title = "Oba Lá Vem Ela",
     artist = "Jorge Ben Jor",
     keyText = "Tom: Bm",
+    auxiliaryBolds = [],
     rows = [
       {
         nodes: [
@@ -96,6 +98,22 @@ function buildMockDocument(options = {}) {
       },
     };
   });
+
+  for (const item of auxiliaryBolds) {
+    const attrs = new Map([["data-chord-name", item.name]]);
+    if (item.index !== undefined && item.index !== null) attrs.set("data-chord-index", item.index);
+    allBolds.push({
+      nodeType: 1,
+      tagName: "B",
+      textContent: item.text ?? item.name,
+      hasAttribute(name) {
+        return attrs.has(name);
+      },
+      getAttribute(name) {
+        return attrs.has(name) ? attrs.get(name) : null;
+      },
+    });
+  }
 
   const preElement = hasPre
     ? {
@@ -228,6 +246,31 @@ test("extractDomSnapshot rejeita HTML parcialmente alterado em atributo ou índi
   if (!brokenIndexResult.ok) {
     assert.equal(brokenIndexResult.error.code, "DOM_STRUCTURE_CHANGED");
   }
+});
+
+test("extractDomSnapshot ignora acordes auxiliares sem índice quando a sequência principal está íntegra", () => {
+  const doc = buildMockDocument({
+    rows: [
+      {
+        nodes: [
+          { type: "b", name: "Fm7", text: "Fm7", index: "0" },
+          { type: "b", name: "Gm7", text: "Gm7", index: "1" },
+        ],
+      },
+    ],
+    auxiliaryBolds: [
+      { name: "Fm7" },
+      { name: "Gm7" },
+    ],
+  });
+
+  const result = extractDomSnapshot(doc);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  assert.deepEqual(result.snapshot.blocks[0].lines, [
+    { type: "chords", chords: ["Fm7", "Gm7"] },
+  ]);
 });
 
 test("extractDomSnapshot preserva tablatura e seção quando marcador está apenas em data-chord-original-trailing", () => {
