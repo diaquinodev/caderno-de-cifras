@@ -1,48 +1,42 @@
 import { extractDomSnapshot } from "./dom-adapter.js";
 import { extractCanonicalCifra } from "./extractor.js";
+import { deliverToCaderno } from "./delivery.js";
+import { applyActionFeedback, createClipperError } from "./errors.js";
 
 /**
  * @typedef {import("./extractor.js").ClipperMetadata} ClipperMetadata
+ * @typedef {import("./delivery.js").DeliveryReceipt} DeliveryReceipt
+ * @typedef {import("./errors.js").ClipperError} ClipperError
  */
 
 /**
- * @typedef {Object} ClipperResultError
- * @property {string} code
- * @property {string} message
+ * @typedef {{ ok: true, text: string, chordCount: number, metadata: ClipperMetadata, receipt: DeliveryReceipt } |
+ *   { ok: false, error: ClipperError }} ClipperResult
  */
 
 /**
- * @typedef {{ ok: true, text: string, chordCount: number, metadata: ClipperMetadata } |
- *   { ok: false, error: ClipperResultError }} ClipperResult
- */
-
-/**
- * Executes the DOM adapter on the active tab upon user click and converts
- * the snapshot into canonical Cifra text.
+ * Executes the DOM adapter on the active tab upon user click, converts
+ * the snapshot into canonical Cifra text, copies it to the clipboard, and opens the Caderno.
+ * Never overwrites the clipboard on error and updates icon feedback idempotently.
  *
  * @param {{ id?: number } | null | undefined} tab
  * @param {any} [chromeApi]
+ * @param {{ destination?: string }} [options]
  * @returns {Promise<ClipperResult>}
  */
-export async function runClipperForTab(tab, chromeApi = /** @type {any} */ (globalThis).chrome) {
+export async function runClipperForTab(tab, chromeApi = /** @type {any} */ (globalThis).chrome, options = {}) {
+  const fail = async (rawCode) => {
+    const error = createClipperError(rawCode);
+    await applyActionFeedback(tab?.id, { ok: false, error }, chromeApi);
+    return /** @type {const} */ ({ ok: false, error });
+  };
+
   if (!tab || typeof tab.id !== "number") {
-    return {
-      ok: false,
-      error: {
-        code: "INVALID_TAB_CONTEXT",
-        message: "Nenhuma aba ativa disponível para extração.",
-      },
-    };
+    return fail("UNSUPPORTED_TAB");
   }
 
   if (!chromeApi?.scripting?.executeScript) {
-    return {
-      ok: false,
-      error: {
-        code: "SCRIPTING_UNAVAILABLE",
-        message: "A permissão de execução na aba ativa não está disponível.",
-      },
-    };
+    return fail("UNSUPPORTED_TAB");
   }
 
   let injectionResults;
@@ -52,42 +46,52 @@ export async function runClipperForTab(tab, chromeApi = /** @type {any} */ (glob
       func: extractDomSnapshot,
     });
   } catch {
-    return {
-      ok: false,
-      error: {
-        code: "INJECTION_BLOCKED",
-        message: "Não foi possível ler a aba ativa. Abra uma página pública de cifra e tente novamente.",
-      },
-    };
+    return fail("UNSUPPORTED_TAB");
   }
 
   const domResult = injectionResults?.[0]?.result;
   if (!domResult || !domResult.ok) {
-    return {
-      ok: false,
-      error: domResult?.error || {
-        code: "DOM_STRUCTURE_CHANGED",
-        message: "Não foi possível extrair a estrutura da cifra nesta aba.",
-      },
-    };
+    return fail(domResult?.error?.code || "DOM_STRUCTURE_CHANGED");
   }
 
   const extracted = extractCanonicalCifra(domResult.snapshot);
   if (!extracted.ok || !("text" in extracted)) {
+    return fail("error" in extracted ? extracted.error : "DOM_STRUCTURE_CHANGED");
+  }
+
+  const delivery = await deliverToCaderno(
+    {
+      ok: true,
+      text: extracted.text,
+      chordCount: extracted.chordCount,
+      metadata: domResult.snapshot.metadata,
+    },
+    tab,
+    chromeApi,
+    options,
+  );
+
+  if (!delivery.ok || !("receipt" in delivery)) {
+    const deliveryError = "error" in delivery ? delivery.error : createClipperError("DELIVERY_FAILED");
+    await applyActionFeedback(tab.id, { ok: false, error: deliveryError }, chromeApi);
     return {
       ok: false,
-      error: {
-        code: "error" in extracted ? extracted.error : "DOM_STRUCTURE_CHANGED",
-        message: "message" in extracted ? extracted.message : "Falha ao extrair cifra.",
-      },
+      error: deliveryError,
     };
   }
+
+  await applyActionFeedback(
+    tab.id,
+    { ok: true, title: delivery.receipt.confirmationMessage },
+    chromeApi,
+  );
 
   return {
     ok: true,
     text: extracted.text,
     chordCount: extracted.chordCount,
     metadata: domResult.snapshot.metadata,
+    receipt: delivery.receipt,
   };
 }
 
@@ -96,11 +100,12 @@ export async function runClipperForTab(tab, chromeApi = /** @type {any} */ (glob
  * Nothing runs automatically on page load; extraction only starts after user gesture.
  *
  * @param {any} [chromeApi]
+ * @param {{ destination?: string }} [options]
  * @returns {((tab: { id?: number }) => Promise<ClipperResult>) | null}
  */
-export function registerActionListener(chromeApi = /** @type {any} */ (globalThis).chrome) {
+export function registerActionListener(chromeApi = /** @type {any} */ (globalThis).chrome, options = {}) {
   if (!chromeApi?.action?.onClicked?.addListener) return null;
-  const listener = async (tab) => runClipperForTab(tab, chromeApi);
+  const listener = async (tab) => runClipperForTab(tab, chromeApi, options);
   chromeApi.action.onClicked.addListener(listener);
   return listener;
 }
