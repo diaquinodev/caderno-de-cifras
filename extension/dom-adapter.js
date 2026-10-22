@@ -101,11 +101,17 @@ export function extractDomSnapshot(doc = document) {
     };
   }
 
-  const allBoldNodes = Array.from(pre.querySelectorAll("b"));
-  const hasAnyIndex = allBoldNodes.some((node) => node.hasAttribute("data-chord-index"));
+  const primaryBoldNodes = rows.flatMap((row) =>
+    Array.from(row.childNodes).filter(
+      (node) => node.nodeType === 1 && /** @type {Element} */ (node).tagName === "B",
+    ),
+  );
+  const hasAnyIndex = primaryBoldNodes.some((node) =>
+    /** @type {Element} */ (node).hasAttribute("data-chord-index"),
+  );
 
-  for (let i = 0; i < allBoldNodes.length; i += 1) {
-    const node = allBoldNodes[i];
+  for (let i = 0; i < primaryBoldNodes.length; i += 1) {
+    const node = /** @type {Element} */ (primaryBoldNodes[i]);
     const attrChord = inline(node.getAttribute("data-chord-name"));
     const textChord = inline(node.textContent);
 
