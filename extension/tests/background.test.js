@@ -7,6 +7,7 @@ test("registerActionListener aguarda clique do usuário antes de executar script
   let registeredHandler = null;
   const executeCalls = [];
   const createdTabs = [];
+  const badges = [];
 
   const mockChrome = {
     action: {
@@ -15,7 +16,9 @@ test("registerActionListener aguarda clique do usuário antes de executar script
           registeredHandler = fn;
         },
       },
-      async setBadgeText() {},
+      async setBadgeText(payload) {
+        badges.push(payload);
+      },
       async setBadgeBackgroundColor() {},
       async setTitle() {},
     },
@@ -65,6 +68,7 @@ test("registerActionListener aguarda clique do usuário antes de executar script
   const result = await registeredHandler({ id: 42 });
   assert.equal(executeCalls.length, 2, "Deve extrair o DOM e em seguida copiar o texto válido");
   assert.deepEqual(createdTabs, [CADERNO_PRODUCTION_URL]);
+  assert.deepEqual(badges, [{ tabId: 42, text: "OK" }]);
   assert.deepEqual(result, {
     ok: true,
     text: "Título: Oba Lá Vem Ela\nArtista: Jorge Ben Jor\nTom: Bm\n\n[Refrão]\nBm7 Em7",
@@ -83,11 +87,12 @@ test("registerActionListener aguarda clique do usuário antes de executar script
   });
 });
 
-test("runClipperForTab retorna erro explícito quando aba é inválida ou bloqueia injeção", async () => {
+test("runClipperForTab retorna ClipperError UNSUPPORTED_TAB quando aba é inválida ou bloqueia injeção", async () => {
   const noTab = await runClipperForTab(null, {});
   assert.equal(noTab.ok, false);
   if (!noTab.ok) {
-    assert.equal(noTab.error.code, "INVALID_TAB_CONTEXT");
+    assert.equal(noTab.error.code, "UNSUPPORTED_TAB");
+    assert.equal(noTab.error.retryable, false);
   }
 
   const blockedChrome = {
@@ -100,6 +105,7 @@ test("runClipperForTab retorna erro explícito quando aba é inválida ou bloque
   const blocked = await runClipperForTab({ id: 7 }, blockedChrome);
   assert.equal(blocked.ok, false);
   if (!blocked.ok) {
-    assert.equal(blocked.error.code, "INJECTION_BLOCKED");
+    assert.equal(blocked.error.code, "UNSUPPORTED_TAB");
+    assert.equal(blocked.error.retryable, false);
   }
 });

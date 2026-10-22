@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extractDomSnapshot } from "../extension/dom-adapter.js";
 import { extractCanonicalCifra } from "../extension/extractor.js";
-import { registerActionListener } from "../extension/background.js";
+import { registerActionListener, runClipperForTab } from "../extension/background.js";
 import { parseCifraSource, verifyCifraSourceInvariants } from "../caderno/js/source.js";
 
 const fixtureUrl = new URL("./fixtures/cifraclub-oba-la-vem-ela.sanitized.html", import.meta.url);
@@ -175,5 +175,82 @@ test.describe("Caderno Clipper - DOM, Extensão e Entrega ao Caderno", () => {
     await expect(cadernoPage.locator(".modal")).toContainText("Oba Lá Vem Ela");
     await expect(cadernoPage.locator(".modal")).toContainText("Tom: Bm");
     await cadernoPage.close();
+  });
+
+  test("fase 6: aba errada, fixture quebrada e clipboard negado nunca sobrescrevem o clipboard existente e são idempotentes", async ({
+    page,
+    context,
+  }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    const html = await readFile(fixtureUrl, "utf8");
+    await page.goto("http://127.0.0.1:4173/#/musicas");
+    await page.evaluate(() => navigator.clipboard.writeText("CONTEUDO_ANTERIOR_PROTEGIDO"));
+
+    const badges = [];
+    let allowClipboardCopy = false;
+
+    const chromeBridge = {
+      action: {
+        async setBadgeText(p) {
+          badges.push(p.text);
+        },
+        async setBadgeBackgroundColor() {},
+        async setTitle() {},
+      },
+      scripting: {
+        async executeScript({ func, args }) {
+          if (Array.isArray(args)) {
+            if (!allowClipboardCopy) {
+              return [{ result: { ok: false } }];
+            }
+            const res = await page.evaluate(func, ...args);
+            return [{ result: res }];
+          }
+          const res = await page.evaluate(func);
+          return [{ result: res }];
+        },
+      },
+      tabs: {
+        async create() {
+          return { id: 202 };
+        },
+      },
+    };
+
+    // 1. Aba que não é cifra
+    await page.setContent("<!doctype html><html><body><h1>Home</h1></body></html>");
+    const r1 = await runClipperForTab({ id: 77 }, chromeBridge);
+    const r2 = await runClipperForTab({ id: 77 }, chromeBridge);
+    expect(r1).toEqual(r2);
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) {
+      expect(r1.error.code).toBe("NOT_CHORD_PAGE");
+      expect(r1.error.retryable).toBe(false);
+    }
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("CONTEUDO_ANTERIOR_PROTEGIDO");
+
+    // 2. Fixture quebrada (DOM_STRUCTURE_CHANGED)
+    await page.setContent(html);
+    await page.evaluate(() => {
+      document.querySelector("pre[data-chord-content]")?.remove();
+    });
+    const broken = await runClipperForTab({ id: 77 }, chromeBridge);
+    expect(broken.ok).toBe(false);
+    if (!broken.ok) {
+      expect(broken.error.code).toBe("DOM_STRUCTURE_CHANGED");
+      expect(broken.error.retryable).toBe(true);
+    }
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("CONTEUDO_ANTERIOR_PROTEGIDO");
+
+    // 3. Permissão de clipboard negada
+    await page.setContent(html);
+    const denied = await runClipperForTab({ id: 77 }, chromeBridge);
+    expect(denied.ok).toBe(false);
+    if (!denied.ok) {
+      expect(denied.error.code).toBe("CLIPBOARD_DENIED");
+      expect(denied.error.retryable).toBe(true);
+    }
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("CONTEUDO_ANTERIOR_PROTEGIDO");
+    expect(badges).toEqual(["ERR", "ERR", "ERR", "ERR"]);
   });
 });
