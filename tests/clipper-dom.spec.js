@@ -253,4 +253,121 @@ test.describe("Caderno Clipper - DOM, Extensão e Entrega ao Caderno", () => {
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("CONTEUDO_ANTERIOR_PROTEGIDO");
     expect(badges).toEqual(["ERR", "ERR", "ERR", "ERR"]);
   });
+
+  test("fase 8: jornada completa (extrair -> copiar -> colar -> compassos 2/4 e 4/4 -> criar cifra -> mudar tonalidade) sem requisições ao Cifra Club", async ({
+    page,
+    context,
+  }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    const html = await readFile(fixtureUrl, "utf8");
+
+    const externalOrLegacyRequests = [];
+    context.on("request", (req) => {
+      const url = req.url();
+      if (url.includes("cifraclub.com.br") || url.includes("/api/cifra")) {
+        externalOrLegacyRequests.push(url);
+      }
+    });
+
+    await page.goto("http://127.0.0.1:4173/#/musicas");
+    await page.setContent(html);
+
+    /** @type {import("@playwright/test").Page | null} */
+    let cadernoPage = null;
+
+    const chromeBridge = {
+      action: {
+        async setBadgeText() {},
+        async setBadgeBackgroundColor() {},
+        async setTitle() {},
+      },
+      scripting: {
+        async executeScript({ func, args }) {
+          const res = Array.isArray(args)
+            ? await page.evaluate(func, ...args)
+            : await page.evaluate(func);
+          return [{ result: res }];
+        },
+      },
+      tabs: {
+        async create({ url }) {
+          cadernoPage = await context.newPage();
+          await cadernoPage.goto(url);
+          return { id: 303, url };
+        },
+      },
+    };
+
+    const clipperResult = await runClipperForTab(
+      { id: 301 },
+      chromeBridge,
+      { destination: "http://127.0.0.1:4173/#/musicas" },
+    );
+    expect(clipperResult.ok).toBe(true);
+    if (!clipperResult.ok || !cadernoPage) return;
+
+    const clipboardText = await page.evaluate(() => navigator.clipboard.readText());
+    await cadernoPage.click('[data-action="new-song"]');
+    await cadernoPage.click('[data-action="open-paste"]');
+    await cadernoPage.fill("#paste-text", clipboardText);
+    await cadernoPage.click('[data-action="inspect-source"]');
+    await cadernoPage.click('[data-action="open-draft"]');
+
+    // Verifica os 43 compassos sugeridos a partir dos 74 acordes, divisão interativa e desfazer
+    await expect(cadernoPage.locator(".modal")).toContainText("8 seção(ões), 43 compasso(s). ✓ Invariantes conferidos");
+    const initialMeasures = await cadernoPage.locator(".draft-measure-box").count();
+    expect(initialMeasures).toBe(43);
+
+    await cadernoPage.locator('[data-action="draft-split-measure"]').first().click();
+    expect(await cadernoPage.locator(".draft-measure-box").count()).toBe(44);
+    await expect(cadernoPage.locator(".modal")).toContainText("8 seção(ões), 44 compasso(s). ✓ Invariantes conferidos");
+
+    await cadernoPage.click("#btn-draft-undo");
+    expect(await cadernoPage.locator(".draft-measure-box").count()).toBe(43);
+
+    await cadernoPage.click('[data-action="draft-set-timesig"][data-timesig="4/4"]');
+    await expect(cadernoPage.locator("#selected-timesig")).toHaveText("4/4");
+
+    // Confirma o rascunho e cria a cifra na folha
+    const confirmBtn = cadernoPage.locator('.modal [data-action="draft-confirm"]');
+    await confirmBtn.scrollIntoViewIfNeeded();
+    await confirmBtn.click();
+    await expect(cadernoPage.locator("#draft-title")).not.toBeVisible();
+
+    await expect(cadernoPage.locator('input[data-field="title"]')).toHaveValue("Oba Lá Vem Ela");
+    await expect(cadernoPage.locator('input[data-field="composer"]')).toHaveValue("Jorge Ben Jor");
+    await expect(cadernoPage.locator('select[data-field="key"]')).toHaveValue("Bm");
+    await expect(cadernoPage.locator('select[data-field="timeSignature"]')).toHaveValue("4/4");
+    await expect(cadernoPage.locator('textarea[data-field="notes"]')).toContainText("Artista: Jorge Ben Jor");
+
+    const paperBody = cadernoPage.locator("#paper-body");
+    await expect(paperBody).toBeVisible();
+    await expect(cadernoPage.getByLabel("Compasso 1", { exact: true })).toHaveValue("B-7 E-7");
+    await expect(cadernoPage.getByLabel("Compasso 4", { exact: true })).toHaveValue("B-7");
+    await expect(cadernoPage.getByLabel("Compasso 18", { exact: true })).toHaveValue("A7");
+
+    // Testa mudança de tonalidade: 1) pré-visualização ("Ver em" Dm = +3 semitons de Bm)
+    await cadernoPage.selectOption("select[data-preview-key]", "Dm");
+    await expect(cadernoPage.locator("#preview-banner")).toBeVisible();
+    await expect(cadernoPage.locator("#preview-banner")).toContainText(
+      "Visualização em Dm. A cifra salva continua em Bm.",
+    );
+    await expect(paperBody).toContainText("D-7");
+    await expect(paperBody).toContainText("G-7");
+    await expect(paperBody).toContainText("C7");
+    await expect(cadernoPage.locator('select[data-field="key"]')).toHaveValue("Bm");
+
+    // 2) Gravar definitivamente no novo tom ("Gravar neste tom")
+    await cadernoPage.click('[data-action="commit-key"]');
+    await expect(cadernoPage.locator('select[data-field="key"]')).toHaveValue("Dm");
+    await expect(cadernoPage.locator("#preview-banner")).toBeHidden();
+    await expect(cadernoPage.getByLabel("Compasso 1", { exact: true })).toHaveValue("D-7 G-7");
+    await expect(cadernoPage.getByLabel("Compasso 4", { exact: true })).toHaveValue("D-7");
+    await expect(cadernoPage.getByLabel("Compasso 18", { exact: true })).toHaveValue("C7");
+
+    // Confirma ausência total de chamadas de rede ao Cifra Club ou à rota removida /api/cifra
+    expect(externalOrLegacyRequests).toEqual([]);
+    await cadernoPage.close();
+  });
 });
+

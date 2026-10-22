@@ -3,7 +3,6 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chartKey, toSharedChart } from "./js/acervo.js";
-import { fetchCifraSource } from "./js/api.js";
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const acervoFile = path.join(root, "..", "data", "acervo.json");
@@ -24,22 +23,6 @@ const types = {
 
 const server = http.createServer((request, response) => {
   const url = new URL(request.url || "/", `http://127.0.0.1:${port}`);
-  if (request.method === "GET" && url.pathname === "/api/cifra") {
-    const target = url.searchParams.get("url") || "";
-    fetchCifraSource(target).then((result) => {
-      console.log(`cifra ${result.status} ${target.slice(0, 180)}`);
-      const payload = result.ok ? { source: result.source } : { error: result.error };
-      response.writeHead(result.status, {
-        "Content-Type": "application/json; charset=utf-8",
-        "Cache-Control": "no-store",
-      });
-      response.end(JSON.stringify(payload));
-    }).catch(() => {
-      response.writeHead(502, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
-      response.end(JSON.stringify({ error: "Não consegui ler esse link." }));
-    });
-    return;
-  }
   if (url.pathname === "/api/acervo") {
     handleAcervo(request, response, url);
     return;
