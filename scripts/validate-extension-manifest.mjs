@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const ALLOWED_PERMISSIONS = new Set(["activeTab", "scripting"]);
 
 /**
  * @param {unknown} candidate
@@ -30,6 +31,36 @@ export function validateExtensionManifest(candidate) {
     const value = manifest[field];
     if (value !== undefined && (!Array.isArray(value) || value.some((item) => typeof item !== "string"))) {
       errors.push(`${field} deve ser uma lista de textos quando informado`);
+    }
+  }
+
+  if (Array.isArray(manifest.permissions)) {
+    for (const perm of manifest.permissions) {
+      if (typeof perm === "string" && !ALLOWED_PERMISSIONS.has(perm)) {
+        errors.push(`permissão não autorizada no manifesto: ${perm}`);
+      }
+    }
+  }
+
+  if (Array.isArray(manifest.host_permissions) && manifest.host_permissions.length > 0) {
+    errors.push("host_permissions não deve declarar hosts permanentes");
+  }
+
+  if (manifest.content_scripts !== undefined) {
+    errors.push("content_scripts permanente não é permitido; use acionamento por clique");
+  }
+
+  if (manifest.background !== undefined) {
+    const bg = /** @type {Record<string, unknown>} */ (manifest.background);
+    if (!bg || typeof bg !== "object" || Array.isArray(bg)) {
+      errors.push("background deve ser um objeto");
+    } else {
+      if (typeof bg.service_worker !== "string" || !bg.service_worker.trim()) {
+        errors.push("background.service_worker deve ser um texto não vazio");
+      }
+      if (bg.type !== "module") {
+        errors.push("background.type deve ser module");
+      }
     }
   }
 
