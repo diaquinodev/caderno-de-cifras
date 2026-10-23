@@ -15,6 +15,13 @@ import {
   undoDraftHistoryState,
   convertDraftToSong,
   validateDraftForConfirmation,
+  isSectionCompacted,
+  getSectionRepeatCompactions,
+  getVisibleSectionMeasures,
+  applyRepeatCompaction,
+  expandRepeatCompaction,
+  dismissRepeatCandidate,
+  getSectionRepeatSuggestionViews,
 } from "./draft.js";
 import {
   KEYS,
@@ -97,6 +104,7 @@ const state = {
   draftActiveTab: "chart",
   selectedDraftChord: null,
   draggedDraftChord: null,
+  draftRepeatLiveAnnouncement: "",
 };
 
 const REPEAT_CYCLE = ["", "start", "end", "both"];
@@ -730,6 +738,9 @@ const actions = {
   "draft-merge-measure": (btn) => handleDraftMergeMeasure(btn.dataset.sectionId, btn.dataset.measureId, btn.dataset.nextId),
   "draft-split-section": (btn) => handleDraftSplitSection(btn.dataset.sectionId),
   "draft-move-measure": (btn) => handleDraftMoveMeasure(btn.dataset.sectionId, btn.dataset.measureId, Number(btn.dataset.dir) || 0),
+  "draft-apply-repeat": (btn) => handleDraftApplyRepeat(btn.dataset.candidateId),
+  "draft-dismiss-repeat": (btn) => handleDraftDismissRepeat(btn.dataset.candidateId),
+  "draft-expand-repeat": (btn) => handleDraftExpandRepeat(btn.dataset.compactionId || btn.dataset.sectionId),
   "draft-switch-tab": (btn) => handleDraftSwitchTab(btn.dataset.tab),
   "draft-undo": () => handleDraftUndo(),
   "draft-confirm": () => confirmDraft(),
@@ -1878,8 +1889,40 @@ function handleDraftUndo() {
   state.currentDraft = res.draft;
   state.draftHistory = res.history;
   state.selectedDraftChord = null;
+  state.draftRepeatLiveAnnouncement = "Última alteração do rascunho desfeita.";
   renderDraftModal();
   toast("Ação desfeita.");
+}
+
+function handleDraftApplyRepeat(candidateId) {
+  if (!state.currentDraft || !candidateId) return;
+  pushDraftHistory();
+  state.currentDraft = applyRepeatCompaction(state.currentDraft, candidateId);
+  state.selectedDraftChord = null;
+  state.draftRepeatLiveAnnouncement =
+    "Repetição compactada como 2x. Expanda a seção caso precise editar compassos.";
+  renderDraftModal();
+  toast("Repetição compactada como 2x.");
+}
+
+function handleDraftDismissRepeat(candidateId) {
+  if (!state.currentDraft || !candidateId) return;
+  pushDraftHistory();
+  state.currentDraft = dismissRepeatCandidate(state.currentDraft, candidateId);
+  state.draftRepeatLiveAnnouncement = "Sugestão de repetição ignorada. Compassos mantidos por extenso.";
+  renderDraftModal();
+  toast("Compassos mantidos completos.");
+}
+
+function handleDraftExpandRepeat(compactionOrSectionId) {
+  if (!state.currentDraft || !compactionOrSectionId) return;
+  pushDraftHistory();
+  state.currentDraft = expandRepeatCompaction(state.currentDraft, compactionOrSectionId);
+  state.selectedDraftChord = null;
+  state.draftRepeatLiveAnnouncement =
+    "Seção expandida com todos os compassos originais. Edição estrutural liberada.";
+  renderDraftModal();
+  toast("Seção expandida.");
 }
 
 function handleDraftSelectChord(sectionId, measureId, chordIndex) {
@@ -2117,10 +2160,50 @@ function renderDraftModal() {
 
   const sectionsHtml = draft.sections.map((sec) => {
     let contentHtml;
+    const compacted = isSectionCompacted(draft, sec.id);
+    const secCompactions = getSectionRepeatCompactions(draft, sec.id);
+    const visibleMeasures = getVisibleSectionMeasures(draft, sec);
+    const repeatSuggestions = getSectionRepeatSuggestionViews(draft, sec.id);
+
     if (sec.kind === "tab") {
       contentHtml = `<pre class="tab-view">${esc(sec.tabContent || "")}</pre>`;
     } else {
-      const measuresHtml = sec.measures.map((m, mIdx) => {
+      const suggestionBannerHtml = repeatSuggestions
+        .map(
+          (sug) => `<div class="draft-repeat-suggestion" data-repeat-candidate-id="${esc(sug.candidateId)}" role="region" aria-label="Sugestão de repetição na seção ${esc(sec.label)}">
+            <div class="draft-repeat-header">
+              <strong>↻ Repetição consecutiva detectada (2x · economia de ${sug.savedMeasures} compassos)</strong>
+              <p class="meta" style="margin:2px 0 6px;">${esc(sug.summary)}</p>
+            </div>
+            <div class="draft-repeat-preview">
+              <div><small class="meta">Por extenso:</small> <code>${esc(sug.before)}</code></div>
+              <div><small class="meta">Compactado:</small> <code>${esc(sug.after)}</code></div>
+            </div>
+            <div class="inline-actions draft-repeat-actions">
+              <button type="button" class="btn primary small" data-action="draft-apply-repeat" data-candidate-id="${esc(sug.candidateId)}">Compactar como 2x</button>
+              <button type="button" class="btn ghost small" data-action="draft-dismiss-repeat" data-candidate-id="${esc(sug.candidateId)}">Manter completo</button>
+            </div>
+          </div>`
+        )
+        .join("");
+
+      const compactedBannerHtml = compacted
+        ? secCompactions
+            .map(
+              (comp) => `<div class="draft-repeat-compacted-banner" data-compaction-id="${esc(comp.id)}" role="region" aria-label="Seção ${esc(sec.label)} compactada como 2x">
+                <div>
+                  <strong>✓ Compactada como ${comp.times}x (${comp.hiddenMeasureIds.length} compassos ocultos na repetição)</strong>
+                  <p class="meta" style="margin:2px 0 0;">Para dividir, unir ou mover compassos e acordes nesta seção, expanda os compassos repetidos primeiro.</p>
+                </div>
+                <div class="inline-actions draft-repeat-actions">
+                  <button type="button" class="btn ghost small" data-action="draft-expand-repeat" data-compaction-id="${esc(comp.id)}" data-section-id="${esc(sec.id)}">Expandir</button>
+                </div>
+              </div>`
+            )
+            .join("")
+        : "";
+
+      const measuresHtml = visibleMeasures.map((m, mIdx) => {
         const chordsList =
           Array.isArray(m.sourceChords) && m.sourceChords.length > 0
             ? m.sourceChords
@@ -2129,10 +2212,11 @@ function renderDraftModal() {
                 .split(/\s+/)
                 .filter(Boolean)
                 .map((tok) => ({ raw: tok, normalized: tok }));
-        const canSplit = chordsList.length > 1;
-        const nextMeasure = sec.measures[mIdx + 1];
+        const canSplit = !compacted && chordsList.length > 1;
+        const nextMeasure = visibleMeasures[mIdx + 1];
         const beatEval = evaluateMeasureBeats(m, draft.timeSignature);
         const selectedIdx =
+          !compacted &&
           state.selectedDraftChord &&
           state.selectedDraftChord.sectionId === sec.id &&
           state.selectedDraftChord.measureId === m.id &&
@@ -2150,19 +2234,29 @@ function renderDraftModal() {
                 const chordLabel = c.raw || c.normalized;
                 const isSelected = selectedIdx === cIdx;
                 const canDrag =
-                  canMoveChordBetweenMeasures(draft, sec.id, m.id, cIdx, -1) ||
-                  canMoveChordBetweenMeasures(draft, sec.id, m.id, cIdx, 1);
-                return `<button type="button" class="measure-chord-token ${isSelected ? "is-selected" : ""}" data-action="draft-select-chord" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-chord-index="${cIdx}" data-chord-raw="${esc(chordLabel)}" data-chord-normalized="${esc(c.normalized || chordLabel)}" aria-pressed="${isSelected ? "true" : "false"}" draggable="${canDrag ? "true" : "false"}" title="Selecionar acorde ${esc(chordLabel)}">${esc(chordLabel)}</button>`;
+                  !compacted &&
+                  (canMoveChordBetweenMeasures(draft, sec.id, m.id, cIdx, -1) ||
+                    canMoveChordBetweenMeasures(draft, sec.id, m.id, cIdx, 1));
+                return `<button type="button" class="measure-chord-token ${isSelected ? "is-selected" : ""}" data-action="draft-select-chord" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-chord-index="${cIdx}" data-chord-raw="${esc(chordLabel)}" data-chord-normalized="${esc(c.normalized || chordLabel)}" aria-pressed="${isSelected ? "true" : "false"}" draggable="${canDrag ? "true" : "false"}" ${compacted ? "disabled" : ""} title="${compacted ? "Expanda a seção para editar acordes" : `Selecionar acorde ${esc(chordLabel)}`}">${esc(chordLabel)}</button>`;
               })
               .join(" ")
           : "—";
+
+        const repeatStartBadge =
+          m.repeat === "start" || m.repeat === "both"
+            ? `<span class="draft-repeat-marker repeat-start-marker" aria-label="Início de repetição">|:</span>`
+            : "";
+        const repeatEndBadge =
+          m.repeat === "end" || m.repeat === "both"
+            ? `<span class="draft-repeat-marker repeat-end-marker" aria-label="Fim de repetição">:|</span>`
+            : "";
 
         const beatMetaHtml = beatEval.summaryLabel
           ? `<div class="measure-beat-meta ${beatEval.needsReview ? "measure-beat-warning" : ""}" data-beat-status="${beatEval.needsReview ? "review" : "ok"}">${beatEval.needsReview ? `⚠ ${esc(beatEval.summaryLabel)} (${beatEval.chordCount} acordes)` : esc(beatEval.summaryLabel)}</div>`
           : "";
 
         let chordActionsHtml = "";
-        if (selectedIdx !== null) {
+        if (selectedIdx !== null && !compacted) {
           const canChordLeft = canMoveChordBetweenMeasures(draft, sec.id, m.id, selectedIdx, -1);
           const canChordRight = canMoveChordBetweenMeasures(draft, sec.id, m.id, selectedIdx, 1);
           const moveLeftBtn = `<button type="button" class="btn ghost micro" data-action="draft-move-chord" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-chord-index="${selectedIdx}" data-dir="-1" ${canChordLeft ? "" : "disabled"} title="${canChordLeft ? `Mover acorde ${esc(selectedChordLabel)} para o compasso anterior` : "Apenas o primeiro acorde do compasso pode ir para o compasso anterior sem alterar a ordem musical"}" aria-label="Mover acorde ${esc(selectedChordLabel)} para o compasso anterior">← Acorde</button>`;
@@ -2173,43 +2267,48 @@ function renderDraftModal() {
           chordActionsHtml = `<div class="measure-chord-actions" role="group" aria-label="Ações do acorde ${esc(selectedChordLabel)}">${moveLeftBtn}${splitAtChordBtn}${moveRightBtn}</div>`;
         }
 
-        const prevBtn = mIdx > 0
+        const prevBtn = !compacted && mIdx > 0
           ? `<button type="button" class="btn ghost micro" data-action="draft-move-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-dir="-1" title="Mover compasso inteiro para esquerda" aria-label="Mover compasso para esquerda">◀</button>`
           : "";
-        const nextBtn = mIdx < sec.measures.length - 1
+        const nextBtn = !compacted && mIdx < visibleMeasures.length - 1
           ? `<button type="button" class="btn ghost micro" data-action="draft-move-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-dir="1" title="Mover compasso inteiro para direita" aria-label="Mover compasso para direita">▶</button>`
           : "";
         const splitBtn = canSplit
           ? `<button type="button" class="btn ghost micro" data-action="draft-split-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" title="${selectedIdx !== null ? `Dividir compasso usando ${esc(selectedChordLabel)} como fronteira` : "Dividir compasso"}">✂ Dividir</button>`
           : "";
-        const mergeBtn = nextMeasure
+        const mergeBtn = !compacted && nextMeasure
           ? `<button type="button" class="btn ghost micro" data-action="draft-merge-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-next-id="${esc(nextMeasure.id)}" title="Unir com próximo">🔗 Unir</button>`
           : "";
 
-        return `<div class="draft-measure-box ${beatEval.needsReview ? "measure-needs-review" : ""} ${selectedIdx !== null ? "has-selected-chord" : ""}" data-measure-id="${esc(m.id)}" data-needs-review="${beatEval.needsReview ? "true" : "false"}">
-          <div class="measure-chords" role="group" aria-label="Acordes do compasso ${mIdx + 1}">${chordTokensHtml}</div>
+        return `<div class="draft-measure-box ${beatEval.needsReview ? "measure-needs-review" : ""} ${selectedIdx !== null ? "has-selected-chord" : ""} ${m.repeat ? `has-repeat-${esc(m.repeat)}` : ""}" data-measure-id="${esc(m.id)}" data-repeat="${esc(m.repeat || "")}" data-needs-review="${beatEval.needsReview ? "true" : "false"}">
+          <div class="measure-chords" role="group" aria-label="Acordes do compasso ${mIdx + 1}">${repeatStartBadge}${chordTokensHtml}${repeatEndBadge}</div>
           ${beatMetaHtml}
           ${chordActionsHtml}
-          <div class="measure-actions" role="group" aria-label="Ações do compasso ${mIdx + 1}">${prevBtn}${nextBtn}${splitBtn}${mergeBtn}</div>
+          ${!compacted ? `<div class="measure-actions" role="group" aria-label="Ações do compasso ${mIdx + 1}">${prevBtn}${nextBtn}${splitBtn}${mergeBtn}</div>` : ""}
         </div>`;
       }).join("");
 
-      const splitSecBtn = sec.measures.length >= 2
+      const splitSecBtn = !compacted && visibleMeasures.length >= 2
         ? `<div style="margin-top:8px;"><button type="button" class="btn ghost small" data-action="draft-split-section" data-section-id="${esc(sec.id)}">Dividir seção ao meio</button></div>`
         : "";
 
-      contentHtml = `<div class="draft-measures-grid">${measuresHtml}</div>${splitSecBtn}`;
+      contentHtml = `${suggestionBannerHtml}${compactedBannerHtml}<div class="draft-measures-grid">${measuresHtml}</div>${splitSecBtn}`;
     }
 
     const badgeClass = sec.kind === "tab" ? "badge tab" : "badge";
-    return `<div class="draft-section-card" data-section-id="${esc(sec.id)}">
-      <h4>${esc(sec.label)} <span class="${badgeClass}">${esc(sec.kind)}</span> <small class="meta">(${sec.measures.length} compassos)</small></h4>
+    const countLabel = compacted
+      ? `${visibleMeasures.length} compassos visíveis de ${sec.measures.length} · 2x`
+      : `${sec.measures.length} compassos`;
+    return `<div class="draft-section-card ${compacted ? "is-compacted" : ""}" data-section-id="${esc(sec.id)}" data-compacted="${compacted ? "true" : "false"}">
+      <h4>${esc(sec.label)} <span class="${badgeClass}">${esc(sec.kind)}</span> <small class="meta">(${countLabel})</small></h4>
       ${contentHtml}
     </div>`;
   }).join("");
 
-  const totalMeasures = draft.sections.reduce((acc, s) => acc + s.measures.length, 0);
+  const totalMeasures = draft.sections.reduce((acc, s) => acc + getVisibleSectionMeasures(draft, s).length, 0);
+  const canonicalMeasures = draft.sections.reduce((acc, s) => acc + s.measures.length, 0);
   const sourceContent = renderDraftSourceContent(draft.sourceSnapshot);
+  const liveAnnouncement = state.draftRepeatLiveAnnouncement || "";
 
   const tabSwitcher = `
     <div class="draft-view-tabs" role="tablist">
@@ -2232,7 +2331,8 @@ function renderDraftModal() {
         ${errorBanner}
         ${warningsHtml}
         <div style="margin: 12px 0;">
-          <p class="meta"><strong>Estrutura:</strong> ${draft.sections.length} seção(ões), ${totalMeasures} compasso(s). ${inv.valid ? "✓ Invariantes conferidos" : "⚠ Atenção aos invariantes"} · <span class="draft-chord-hint">Toque em um acorde para movê-lo entre compassos ou dividir a partir dele.</span></p>
+          <div id="draft-repeat-live" class="sr-only" aria-live="polite">${esc(liveAnnouncement)}</div>
+          <p class="meta"><strong>Estrutura:</strong> ${draft.sections.length} seção(ões), ${totalMeasures !== canonicalMeasures ? `${totalMeasures} compasso(s) visíveis (${canonicalMeasures} canônicos)` : `${totalMeasures} compasso(s)`}. ${inv.valid ? "✓ Invariantes conferidos" : "⚠ Atenção aos invariantes"} · <span class="draft-chord-hint">Toque em um acorde para movê-lo entre compassos ou dividir a partir dele.</span></p>
           ${sectionsHtml}
         </div>
       </div>

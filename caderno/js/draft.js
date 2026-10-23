@@ -95,6 +95,17 @@ import { uid, blankSong } from "./store.js";
  */
 
 /**
+ * @typedef {Object} RepeatSuggestionView
+ * @property {string} candidateId
+ * @property {string} sectionId
+ * @property {string} sectionLabel
+ * @property {string} summary
+ * @property {string} before
+ * @property {string} after
+ * @property {number} savedMeasures
+ */
+
+/**
  * Avalia a ocupação de tempos de um compasso de acordo com a fórmula de compasso.
  * Em 4/4:
  * - 1 acorde ocupa 4 tempos ([4])
@@ -1370,4 +1381,39 @@ export function dismissRepeatCandidate(draft, candidateId) {
     ...draft,
     dismissedRepeatCandidateIds: [...existing, candidateId],
   };
+}
+
+/**
+ * Constrói uma visão amigável de sugestão de repetição para exibição no editor de rascunho.
+ *
+ * @param {RepeatCandidate} candidate
+ * @returns {RepeatSuggestionView}
+ */
+export function buildRepeatSuggestionView(candidate) {
+  const blockPreview = Array.isArray(candidate?.chordsPreview)
+    ? candidate.chordsPreview.join(" | ")
+    : "";
+  return {
+    candidateId: candidate.id,
+    sectionId: candidate.sectionId,
+    sectionLabel: candidate.sectionLabel || "A",
+    summary: candidate.summary,
+    before: `| ${blockPreview} | ${blockPreview} |`,
+    after: `|: ${blockPreview} :| (2x)`,
+    savedMeasures: candidate.savedMeasures,
+  };
+}
+
+/**
+ * Retorna as sugestões de repetição formatadas para uma seção específica do rascunho.
+ *
+ * @param {ImportDraft} draft
+ * @param {string} sectionId
+ * @returns {RepeatSuggestionView[]}
+ */
+export function getSectionRepeatSuggestionViews(draft, sectionId) {
+  if (!draft || !sectionId) return [];
+  return detectRepeatCandidates(draft)
+    .filter((c) => c.sectionId === sectionId)
+    .map(buildRepeatSuggestionView);
 }
