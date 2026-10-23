@@ -19,6 +19,11 @@ test("createClipperError tipa cada código de erro com mensagem instrutiva e fla
   assert.equal(domChanged.retryable, true);
   assert.match(domChanged.message, /estrutura da página mudou/);
 
+  const unsupportedChord = createClipperError("INVALID_CHORD");
+  assert.equal(unsupportedChord.code, "UNSUPPORTED_CHORD");
+  assert.equal(unsupportedChord.retryable, false);
+  assert.match(unsupportedChord.message, /notação de acorde ainda não suportada/);
+
   const noChords = createClipperError("NO_CHORDS");
   assert.equal(noChords.code, "NO_CHORDS");
   assert.equal(noChords.retryable, false);
