@@ -434,3 +434,35 @@ test("stepPerformancePosition funciona para musica avulsa fora de setlist", () =
   const singleBoundary = stepPerformancePosition({ itemIndex: 0, page: 1 }, -1, { items: [] });
   assert.deepEqual(singleBoundary, { itemIndex: 0, page: 1, changedSong: false, reachedBoundary: true });
 });
+
+test("stepPerformancePosition avança e recua por dupla de páginas (2-up) e suporta última dupla ímpar", () => {
+  const library = {
+    songs: [
+      { id: "chart-3p" },
+      { id: "chart-2p" },
+    ],
+  };
+  const items = [{ songId: "chart-3p" }, { songId: "chart-2p" }];
+  const chartPageCount = (entry) => (entry.id === "chart-3p" ? 3 : 2);
+  const chartPageSpan = () => 2;
+  const ctx = { items, library, chartPageCount, chartPageSpan };
+
+  // Em 2-up, páginas 1-2 estão visíveis; avançar leva à página 3 (última dupla incompleta)
+  const spread2 = stepPerformancePosition({ itemIndex: 0, page: 1 }, 1, ctx);
+  assert.deepEqual(spread2, { itemIndex: 0, page: 3, changedSong: false, reachedBoundary: false });
+
+  // Avançar da página 3 passa para a próxima música na página 1 (mostrando 1-2)
+  const nextSong = stepPerformancePosition(spread2, 1, ctx);
+  assert.deepEqual(nextSong, { itemIndex: 1, page: 1, changedSong: true, reachedBoundary: false });
+
+  // Como chart-2p tem 2 páginas e ambas estão visíveis em 2-up (1-2 de 2), já está no limite final
+  assert.equal(canStepPerformance(nextSong, 1, ctx), false);
+
+  // Recuar da música 2 volta para o início da última dupla da música 1 (página 3)
+  const backToOddSpread = stepPerformancePosition(nextSong, -1, ctx);
+  assert.deepEqual(backToOddSpread, { itemIndex: 0, page: 3, changedSong: true, reachedBoundary: false });
+
+  // Recuar da página 3 volta para o início da primeira dupla (página 1)
+  const backToFirstSpread = stepPerformancePosition(backToOddSpread, -1, ctx);
+  assert.deepEqual(backToFirstSpread, { itemIndex: 0, page: 1, changedSong: false, reachedBoundary: false });
+});
