@@ -578,15 +578,28 @@ export function applyPdfSplitDraft(library, draft, { allowOverlap = false, allow
 
 
 /**
- * Retorna a quantidade de páginas utilizáveis da música (1 para cifras de texto, ou tamanho do intervalo do PDF).
+ * Retorna a quantidade de páginas da representação solicitada da música.
+ * No modo automático, mantém o comportamento legado: PDF quando disponível,
+ * caso contrário cifra HTML.
  *
  * @param {any} song
+ * @param {Object} [options]
+ * @param {"auto" | "chart" | "pdf"} [options.representation]
+ * @param {(song: any) => number} [options.chartPageCount] Contador runtime para cifras HTML
  * @returns {number}
  */
-export function getSongPageCount(song) {
+export function getSongPageCount(song, { representation = "auto", chartPageCount } = {}) {
   if (!song) return 1;
-  if (song.pdfRef) return pdfRangeSize(song.pdfRef);
-  return Math.max(1, Number(song.pdfPages) || 1);
+  const legacyPdfPages = Math.max(0, Number(song.pdfPages) || 0);
+  const hasPdf = Boolean(song.pdfRef || song.pdfName || legacyPdfPages > 1);
+  if (representation !== "chart" && hasPdf) {
+    return song.pdfRef ? pdfRangeSize(song.pdfRef) : Math.max(1, legacyPdfPages);
+  }
+  if (typeof chartPageCount === "function") {
+    const runtimePages = Math.floor(Number(chartPageCount(song)));
+    if (Number.isFinite(runtimePages) && runtimePages > 0) return runtimePages;
+  }
+  return 1;
 }
 
 /**
@@ -611,9 +624,16 @@ export function getSongPageCount(song) {
  * @param {Object} [context]
  * @param {Array<{ songId: string }>} [context.items] Lista de itens da setlist
  * @param {any} [context.library] Catálogo da biblioteca para consulta de páginas
+ * @param {"auto" | "chart" | "pdf"} [context.representation] Representação navegada
+ * @param {(song: any) => number} [context.chartPageCount] Contador runtime para cifras HTML
  * @returns {StepPerformanceResult}
  */
-export function stepPerformancePosition(position, direction, { items = [], library = null } = {}) {
+export function stepPerformancePosition(position, direction, {
+  items = [],
+  library = null,
+  representation = "auto",
+  chartPageCount,
+} = {}) {
   const dir = direction === "prev" || direction === "previous" || Number(direction) < 0 ? -1 : 1;
   const itemCount = Array.isArray(items) ? items.length : 0;
 
@@ -630,7 +650,8 @@ export function stepPerformancePosition(position, direction, { items = [], libra
 
   const currentIndex = Math.max(0, Math.min(itemCount - 1, Number(position?.itemIndex) || 0));
   const currentSong = library ? findSong(library, items[currentIndex]?.songId) : null;
-  const currentPages = getSongPageCount(currentSong);
+  const pageOptions = { representation, chartPageCount };
+  const currentPages = getSongPageCount(currentSong, pageOptions);
   const currentPage = Math.max(1, Math.min(currentPages, Number(position?.page) || 1));
 
   if (dir > 0) {
@@ -668,7 +689,7 @@ export function stepPerformancePosition(position, direction, { items = [], libra
     if (currentIndex > 0) {
       const prevIndex = currentIndex - 1;
       const prevSong = library ? findSong(library, items[prevIndex]?.songId) : null;
-      const prevPages = getSongPageCount(prevSong);
+      const prevPages = getSongPageCount(prevSong, pageOptions);
       return {
         itemIndex: prevIndex,
         page: prevPages,
@@ -693,6 +714,8 @@ export function stepPerformancePosition(position, direction, { items = [], libra
  * @param {Object} [context]
  * @param {Array<{ songId: string }>} [context.items]
  * @param {any} [context.library]
+ * @param {"auto" | "chart" | "pdf"} [context.representation]
+ * @param {(song: any) => number} [context.chartPageCount]
  * @returns {boolean}
  */
 export function canStepPerformance(position, direction, context = {}) {
