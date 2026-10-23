@@ -1,5 +1,5 @@
 /**
- * @typedef {"UNSUPPORTED_TAB" | "NOT_CHORD_PAGE" | "DOM_STRUCTURE_CHANGED" | "NO_CHORDS" | "CLIPBOARD_DENIED" | "DELIVERY_FAILED"} ClipperErrorCode
+ * @typedef {"UNSUPPORTED_TAB" | "NOT_CHORD_PAGE" | "DOM_STRUCTURE_CHANGED" | "UNSUPPORTED_CHORD" | "NO_CHORDS" | "CLIPBOARD_DENIED" | "DELIVERY_FAILED"} ClipperErrorCode
  */
 
 /**
@@ -22,6 +22,10 @@ const ERROR_CATALOG = {
   DOM_STRUCTURE_CHANGED: {
     message: "A estrutura da página mudou ou está incompleta. Recarregue a página ou copie os acordes manualmente.",
     retryable: true,
+  },
+  UNSUPPORTED_CHORD: {
+    message: "A página contém uma notação de acorde ainda não suportada. Envie a URL para adicionarmos esse formato com segurança.",
+    retryable: false,
   },
   NO_CHORDS: {
     message: "Nenhum acorde reconhecível foi encontrado nesta página. Verifique se a cifra possui acordes visíveis.",
@@ -53,7 +57,7 @@ export function createClipperError(rawCode, customMessage) {
     UNSUPPORTED_TAB: "UNSUPPORTED_TAB",
     NOT_CHORD_PAGE: "NOT_CHORD_PAGE",
     DOM_STRUCTURE_CHANGED: "DOM_STRUCTURE_CHANGED",
-    INVALID_CHORD: "DOM_STRUCTURE_CHANGED",
+    INVALID_CHORD: "UNSUPPORTED_CHORD",
     INVALID_TAB: "DOM_STRUCTURE_CHANGED",
     NO_CHORDS: "NO_CHORDS",
     CLIPBOARD_DENIED: "CLIPBOARD_DENIED",
