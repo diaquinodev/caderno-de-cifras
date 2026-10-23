@@ -69,6 +69,21 @@ import { uid, blankSong } from "./store.js";
  */
 
 /**
+ * @typedef {Object} RepeatCandidate
+ * @property {string} id
+ * @property {string} sectionId
+ * @property {string} sectionLabel
+ * @property {string[]} firstMeasureIds
+ * @property {string[]} repeatedMeasureIds
+ * @property {number} times
+ * @property {number} savedMeasures
+ * @property {number} startMeasureNumber
+ * @property {number} endMeasureNumber
+ * @property {string[]} chordsPreview
+ * @property {string} summary
+ */
+
+/**
  * Avalia a ocupação de tempos de um compasso de acordo com a fórmula de compasso.
  * Em 4/4:
  * - 1 acorde ocupa 4 tempos ([4])
@@ -975,3 +990,180 @@ export function validateDraftForConfirmation(draft) {
     errors,
   };
 }
+
+/**
+ * Extrai a assinatura normalizada de um compasso para comparação conservadora de repetição.
+ * Retorna null se o compasso possuir barra de repetição, casa de final, estiver vazio ou contiver apenas NC.
+ *
+ * @param {DraftMeasure | { chords?: string, repeat?: string, ending?: string, sourceChords?: SourceChord[] }} measure
+ * @returns {{ signature: string, tokens: string[] } | null}
+ */
+export function getMeasureRepeatSignature(measure) {
+  if (!measure || typeof measure !== "object") return null;
+  if (String(measure.repeat || "").trim() || String(measure.ending || "").trim()) {
+    return null;
+  }
+
+  const tokens = Array.isArray(measure.sourceChords) && measure.sourceChords.length > 0
+    ? measure.sourceChords.map((c) => String(c?.normalized || c?.raw || "").trim()).filter(Boolean)
+    : String(measure.chords || "")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+
+  if (tokens.length === 0 || tokens.every((t) => t === "NC")) {
+    return null;
+  }
+
+  return {
+    signature: tokens.join(" "),
+    tokens,
+  };
+}
+
+function matchesSignatureRange(sigs, firstStart, secondStart, length) {
+  for (let offset = 0; offset < length; offset += 1) {
+    const a = sigs[firstStart + offset];
+    const b = sigs[secondStart + offset];
+    if (!a || !b || a.signature !== b.signature) return false;
+  }
+  return true;
+}
+
+function isPrimitiveSignatureBlock(sigs, start, length) {
+  for (let period = 1; period < length; period += 1) {
+    if (length % period !== 0) continue;
+    let allMatch = true;
+    for (let offset = period; offset < length; offset += period) {
+      if (!matchesSignatureRange(sigs, start, start + offset, period)) {
+        allMatch = false;
+        break;
+      }
+    }
+    if (allMatch) return false;
+  }
+  return true;
+}
+
+/**
+ * Detecta candidatos conservadores de repetição (2x consecutivos, >= 2 compassos por bloco)
+ * dentro de uma única seção musical, sem mutar a seção.
+ *
+ * @param {DraftSection} section
+ * @param {Set<string>} [excludedMeasureIds]
+ * @returns {RepeatCandidate[]}
+ */
+export function detectSectionRepeatCandidates(section, excludedMeasureIds = new Set()) {
+  if (!section || section.kind !== "chords" || !Array.isArray(section.measures)) {
+    return [];
+  }
+  const measures = section.measures;
+  const n = measures.length;
+  if (n < 4) return [];
+
+  const sigs = measures.map((m) => (excludedMeasureIds.has(m?.id) ? null : getMeasureRepeatSignature(m)));
+  const rawCandidates = [];
+
+  for (let length = Math.floor(n / 2); length >= 2; length -= 1) {
+    for (let start = 0; start <= n - 2 * length; start += 1) {
+      if (!matchesSignatureRange(sigs, start, start + length, length)) continue;
+
+      const distinctChords = new Set();
+      for (let offset = 0; offset < length; offset += 1) {
+        for (const token of sigs[start + offset].tokens) {
+          distinctChords.add(token);
+        }
+      }
+      if (distinctChords.size < 2) continue;
+
+      if (!isPrimitiveSignatureBlock(sigs, start, length)) continue;
+
+      const hasPrecedingOccurrence =
+        start >= length && matchesSignatureRange(sigs, start - length, start, length);
+      const hasFollowingOccurrence =
+        start + 3 * length <= n && matchesSignatureRange(sigs, start, start + 2 * length, length);
+      const hasImmediatePrefixOverlap =
+        start > 0 && sigs[start - 1]?.signature === sigs[start + length - 1]?.signature;
+      const hasImmediateSuffixOverlap =
+        start + 2 * length < n && sigs[start]?.signature === sigs[start + 2 * length]?.signature;
+      if (
+        hasPrecedingOccurrence ||
+        hasFollowingOccurrence ||
+        hasImmediatePrefixOverlap ||
+        hasImmediateSuffixOverlap
+      ) {
+        continue;
+      }
+
+      rawCandidates.push({ start, length });
+    }
+  }
+
+  rawCandidates.sort((a, b) => b.length - a.length || a.start - b.start);
+
+  const selected = [];
+  for (const cand of rawCandidates) {
+    const candEnd = cand.start + 2 * cand.length - 1;
+    const overlaps = selected.some((sel) => {
+      const selEnd = sel.start + 2 * sel.length - 1;
+      return cand.start <= selEnd && candEnd >= sel.start;
+    });
+    if (!overlaps) {
+      selected.push(cand);
+    }
+  }
+
+  selected.sort((a, b) => a.start - b.start);
+
+  return selected.map(({ start, length }) => {
+    const firstMeasures = measures.slice(start, start + length);
+    const repeatedMeasures = measures.slice(start + length, start + 2 * length);
+    const firstMeasureIds = firstMeasures.map((m) => m.id);
+    const repeatedMeasureIds = repeatedMeasures.map((m) => m.id);
+    const firstStartNum = start + 1;
+    const firstEndNum = start + length;
+    const secondStartNum = start + length + 1;
+    const secondEndNum = start + 2 * length;
+    const chordsPreview = sigs.slice(start, start + length).map((s) => s.signature);
+    return {
+      id: `${section.id}:${firstMeasureIds.join(",")}=>${repeatedMeasureIds.join(",")}`,
+      sectionId: section.id,
+      sectionLabel: section.label || "A",
+      firstMeasureIds,
+      repeatedMeasureIds,
+      times: 2,
+      savedMeasures: length,
+      startMeasureNumber: firstStartNum,
+      endMeasureNumber: secondEndNum,
+      chordsPreview,
+      summary: `Compassos ${firstStartNum}–${firstEndNum} repetem em ${secondStartNum}–${secondEndNum} (economia de ${length} compassos).`,
+    };
+  });
+}
+
+/**
+ * Encontra progressões consecutivas exatamente repetidas em todas as seções elegíveis
+ * do rascunho, sem mutar o rascunho.
+ *
+ * @param {ImportDraft} draft
+ * @returns {RepeatCandidate[]}
+ */
+export function detectRepeatCandidates(draft) {
+  if (!draft || !Array.isArray(draft.sections)) return [];
+  const compactions = Array.isArray(/** @type {any} */ (draft).repeatCompactions)
+    ? /** @type {any} */ (draft).repeatCompactions
+    : [];
+  const compactedSectionIds = new Set(compactions.map((c) => c.sectionId));
+  const excludedMeasureIds = new Set(
+    compactions.flatMap((c) => [...(c.keptMeasureIds || []), ...(c.hiddenMeasureIds || [])])
+  );
+
+  const candidates = [];
+  for (const section of draft.sections) {
+    if (compactedSectionIds.has(section.id)) continue;
+    candidates.push(...detectSectionRepeatCandidates(section, excludedMeasureIds));
+  }
+  return candidates;
+}
+
+export const findConsecutiveRepeatCandidates = detectRepeatCandidates;
