@@ -1152,6 +1152,111 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
 
     expect(errors).toEqual([]);
   });
+  test("fase 13: edicao de acordes por compasso (| F#m D7M | C#m7 B | E7 | -> | F#m | D7M C#m7 | B | E7 |), tempos em 4/4 e desfazer em 390x844, 1024x768 e 1440x900", async ({ page }) => {
+    const errors = await setupPage(page, { seedPdf: false });
+    const viewports = [
+      { width: 390, height: 844 },
+      { width: 1024, height: 768 },
+      { width: 1440, height: 900 },
+    ];
+
+    for (const vp of viewports) {
+      await page.setViewportSize(vp);
+      await gotoRoute(page, "#/musicas");
+
+      await page.click('[data-action="new-song"]');
+      await page.click('[data-action="open-paste"]');
+      await page.fill("#paste-text", "Título: Caso Compasso\nTom: A\n[A]\nF#m D7M C#m7 B E7");
+      await page.click('[data-action="open-draft"]');
+      await expect(page.locator("#draft-title")).toBeVisible();
+
+      // Seleciona 4/4 para habilitar a avaliação de tempos de 4/4
+      await page.click('[data-action="draft-set-timesig"][data-timesig="4/4"]');
+      await expect(page.locator("#selected-timesig")).toHaveText("4/4");
+
+      const measureBoxes = page.locator(".draft-section-card").first().locator(".draft-measure-box");
+      await expect(measureBoxes).toHaveCount(3);
+
+      // Estado inicial sugerido pela heurística de pares: | F#m D7M | C#m7 B | E7 |
+      const getMeasureStrings = async () => {
+        const count = await measureBoxes.count();
+        const out = [];
+        for (let i = 0; i < count; i += 1) {
+          const txt = await measureBoxes.nth(i).locator(".measure-chords").textContent();
+          out.push((txt || "").trim().replace(/\s+/g, " "));
+        }
+        return out;
+      };
+
+      expect(await getMeasureStrings()).toEqual(["F#m D7M", "C#m7 B", "E7"]);
+
+      // Verifica indicação de tempos em 4/4 (2 + 2 tempos nos dois primeiros, 4 tempos no último)
+      await expect(measureBoxes.nth(0).locator(".measure-beat-meta")).toContainText("2 + 2 tempos");
+      await expect(measureBoxes.nth(2).locator(".measure-beat-meta")).toContainText("4 tempos");
+
+      // Passo 1: seleciona D7M no compasso 1 e move isoladamente para o compasso seguinte
+      const d7mBtn = measureBoxes.nth(0).locator('.measure-chord-token[data-chord-raw="D7M"]');
+      await d7mBtn.click();
+      await expect(d7mBtn).toHaveAttribute("aria-pressed", "true");
+
+      const moveRightBtn = measureBoxes.nth(0).locator('[data-action="draft-move-chord"][data-dir="1"]');
+      await expect(moveRightBtn).toBeEnabled();
+      await moveRightBtn.click();
+
+      // Agora temos | F#m | D7M C#m7 B | E7 |
+      expect(await getMeasureStrings()).toEqual(["F#m", "D7M C#m7 B", "E7"]);
+
+      // O compasso 2 tem 3 acordes em 4/4 -> deve exibir aviso de conferência sem duração inventada
+      await expect(measureBoxes.nth(1)).toHaveAttribute("data-needs-review", "true");
+      await expect(measureBoxes.nth(1).locator(".measure-beat-meta")).toContainText("Conferir divisão (3 acordes)");
+      await expect(page.locator("#draft-warnings-list")).toContainText("possui 3 acordes em 4/4");
+
+      // Passo 2: seleciona B no compasso 2 e divide usando B como fronteira
+      const bBtn = measureBoxes.nth(1).locator('.measure-chord-token[data-chord-raw="B"]');
+      await bBtn.click();
+      await expect(bBtn).toHaveAttribute("aria-pressed", "true");
+
+      await measureBoxes.nth(1).locator('[data-action="draft-split-measure"]').click();
+
+      // Resultado atingido sem editar texto: | F#m | D7M C#m7 | B | E7 |
+      expect(await getMeasureStrings()).toEqual(["F#m", "D7M C#m7", "B", "E7"]);
+      await expect(measureBoxes.nth(0).locator(".measure-beat-meta")).toContainText("4 tempos");
+      await expect(measureBoxes.nth(1).locator(".measure-beat-meta")).toContainText("2 + 2 tempos");
+      await expect(measureBoxes.nth(2).locator(".measure-beat-meta")).toContainText("4 tempos");
+      await expect(measureBoxes.nth(3).locator(".measure-beat-meta")).toContainText("4 tempos");
+
+      // Testa Desfazer (Undo) e refazer a divisão para provar reversibilidade
+      await page.click("#btn-draft-undo");
+      expect(await getMeasureStrings()).toEqual(["F#m", "D7M C#m7 B", "E7"]);
+
+      await measureBoxes.nth(1).locator('.measure-chord-token[data-chord-raw="B"]').click();
+      await measureBoxes.nth(1).locator('[data-action="draft-split-chord"]').click();
+      expect(await getMeasureStrings()).toEqual(["F#m", "D7M C#m7", "B", "E7"]);
+
+      // Verifica ausência de rolagem horizontal acidental na janela
+      const overflowX = await page.evaluate(
+        () => document.documentElement.scrollWidth - window.innerWidth
+      );
+      expect(overflowX).toBeLessThanOrEqual(0);
+
+      // Fecha/cancela nos dois primeiros viewports e confirma no último (1440x900)
+      if (vp.width < 1440) {
+        const cancelBtn = page.locator('.modal [data-action="draft-cancel"]');
+        await cancelBtn.scrollIntoViewIfNeeded();
+        await cancelBtn.click();
+        await expect(page.locator("#draft-title")).not.toBeVisible();
+      } else {
+        const confirmBtn = page.locator('.modal [data-action="draft-confirm"]');
+        await confirmBtn.scrollIntoViewIfNeeded();
+        await confirmBtn.click();
+        await expect(page.locator("#draft-title")).not.toBeVisible();
+        await expect(page.locator("input.sheet-title")).toHaveValue("Caso Compasso");
+        await expect(page.locator("#paper-body .bar")).toHaveCount(4);
+      }
+    }
+
+    expect(errors).toEqual([]);
+  });
   test("fase 11: pwa manifest, prontidao offline e operacao de palco sem rede", async ({ page, request }) => {
     // 1. Verifica headers e conteudo do manifest
     const manifestRes = await request.get("/manifest.webmanifest");
