@@ -5,11 +5,18 @@ import {
   suggestChart,
   verifyDraftInvariants,
   updateDraftTimeSignature,
+  evaluateMeasureBeats,
   splitMeasure,
+  splitMeasureAtChord,
+  canMoveChordBetweenMeasures,
+  moveChordBetweenMeasures,
   mergeMeasures,
   moveMeasure,
   splitSection,
   mergeSections,
+  createDraftHistory,
+  pushDraftHistoryState,
+  undoDraftHistoryState,
   convertDraftToSong,
   validateDraftForConfirmation,
 } from "./draft.js";
@@ -138,6 +145,196 @@ test("splitMeasure: divide compasso em dois mantendo a proveniência dos acordes
 
   const inv = verifyDraftInvariants(updated, source);
   assert.equal(inv.valid, true, "Invariantes devem se manter após splitMeasure");
+});
+
+test("splitMeasureAtChord: usa o acorde selecionado como fronteira para dividir compassos com 2 ou 3 acordes", () => {
+  const source = parseCifraSource(`Tom: A
+[A]
+| D7M C#m7 B | E7 |`);
+  const draft = suggestChart(source, { timeSignature: "4/4" });
+  const sec = draft.sections[0];
+  const firstMeasureId = sec.measures[0].id; // "Dmaj7 C#m7 B"
+
+  // Selecionando o 3º acorde (índice 2 = "B") como fronteira:
+  const splitAtThird = splitMeasureAtChord(draft, sec.id, firstMeasureId, 2);
+  assert.deepEqual(
+    splitAtThird.sections[0].measures.map((m) => m.chords),
+    ["Dmaj7 C#m7", "B", "E7"]
+  );
+  assert.equal(verifyDraftInvariants(splitAtThird, source).valid, true);
+
+  // Selecionando o 1º acorde (índice 0 = "Dmaj7"): separa o 1º dos demais
+  const splitAtFirst = splitMeasureAtChord(draft, sec.id, firstMeasureId, 0);
+  assert.deepEqual(
+    splitAtFirst.sections[0].measures.map((m) => m.chords),
+    ["Dmaj7", "C#m7 B", "E7"]
+  );
+  assert.equal(verifyDraftInvariants(splitAtFirst, source).valid, true);
+});
+
+test("moveChordBetweenMeasures: transforma | F#m D7M | C#m7 B | E7 | em | F#m | D7M C#m7 | B | E7 | preservando ordem e proveniência", () => {
+  const source = parseCifraSource(`Tom: A
+[A]
+F#m D7M C#m7 B E7`);
+  let draft = suggestChart(source, { timeSignature: "4/4" });
+
+  // Heurística inicial de pares produz: | F#m Dmaj7 | C#m7 B | E7 |
+  assert.deepEqual(
+    draft.sections[0].measures.map((m) => m.chords),
+    ["F#m Dmaj7", "C#m7 B", "E7"]
+  );
+
+  // Caminho 1: mover D7M (índice 1 do compasso 0) para o compasso seguinte -> | F#m | Dmaj7 C#m7 B | E7 |
+  const secId = draft.sections[0].id;
+  const m0Id = draft.sections[0].measures[0].id;
+  assert.equal(canMoveChordBetweenMeasures(draft, secId, m0Id, 0, 1), false, "Não pode mover F#m pulando D7M");
+  assert.equal(canMoveChordBetweenMeasures(draft, secId, m0Id, 1, 1), true, "Pode mover D7M para o compasso seguinte");
+
+  draft = moveChordBetweenMeasures(draft, secId, m0Id, 1, 1);
+  assert.deepEqual(
+    draft.sections[0].measures.map((m) => m.chords),
+    ["F#m", "Dmaj7 C#m7 B", "E7"]
+  );
+  assert.equal(verifyDraftInvariants(draft, source).valid, true);
+
+  // Compasso 2 agora tem 3 acordes em 4/4 -> deve emitir aviso MEASURE_CHORD_COUNT_REVIEW
+  assert.equal(
+    draft.warnings.some((w) => w.code === "MEASURE_CHORD_COUNT_REVIEW"),
+    true,
+    "Compasso com 3 acordes em 4/4 deve gerar aviso para conferência"
+  );
+
+  // Dividir no acorde B (índice 2 do compasso 1) -> | F#m | Dmaj7 C#m7 | B | E7 |
+  const m1Id = draft.sections[0].measures[1].id;
+  draft = splitMeasureAtChord(draft, secId, m1Id, 2);
+  assert.deepEqual(
+    draft.sections[0].measures.map((m) => m.chords),
+    ["F#m", "Dmaj7 C#m7", "B", "E7"]
+  );
+  assert.equal(verifyDraftInvariants(draft, source).valid, true);
+  assert.equal(
+    draft.warnings.some((w) => w.code === "MEASURE_CHORD_COUNT_REVIEW"),
+    false,
+    "Aviso de 3+ acordes deve desaparecer quando todos os compassos têm 1 ou 2 acordes"
+  );
+});
+
+test("moveChordBetweenMeasures: suporta mover o primeiro acorde para o compasso anterior e absorver compasso unitário", () => {
+  const source = parseCifraSource(`Tom: A
+[A]
+F#m D7M C#m7 B E7`);
+  let draft = suggestChart(source, { timeSignature: "4/4" });
+  const secId = draft.sections[0].id;
+
+  // Caminho 2: dividir | F#m Dmaj7 | no acorde Dmaj7 -> | F#m | Dmaj7 | C#m7 B | E7 |
+  draft = splitMeasureAtChord(draft, secId, draft.sections[0].measures[0].id, 1);
+  assert.deepEqual(
+    draft.sections[0].measures.map((m) => m.chords),
+    ["F#m", "Dmaj7", "C#m7 B", "E7"]
+  );
+
+  // Mover C#m7 (índice 0 do compasso 2) para o compasso anterior (| Dmaj7 |) -> | F#m | Dmaj7 C#m7 | B | E7 |
+  const m2Id = draft.sections[0].measures[2].id;
+  assert.equal(canMoveChordBetweenMeasures(draft, secId, m2Id, 0, -1), true);
+  assert.equal(canMoveChordBetweenMeasures(draft, secId, m2Id, 1, -1), false, "Não pode mover B pulando C#m7");
+
+  draft = moveChordBetweenMeasures(draft, secId, m2Id, 0, -1);
+  assert.deepEqual(
+    draft.sections[0].measures.map((m) => m.chords),
+    ["F#m", "Dmaj7 C#m7", "B", "E7"]
+  );
+  assert.equal(verifyDraftInvariants(draft, source).valid, true);
+
+  // Se mover B (único acorde do compasso 2) para o compasso seguinte (| E7 |), o compasso vazio é removido:
+  const mBId = draft.sections[0].measures[2].id;
+  draft = moveChordBetweenMeasures(draft, secId, mBId, 0, 1);
+  assert.deepEqual(
+    draft.sections[0].measures.map((m) => m.chords),
+    ["F#m", "Dmaj7 C#m7", "B E7"]
+  );
+  assert.equal(verifyDraftInvariants(draft, source).valid, true);
+});
+
+test("evaluateMeasureBeats: calcula tempos em 4/4 (1 acorde = 4t, 2 acordes = 2+2t, 3+ acordes = aviso sem duração inventada)", () => {
+  const m1 = { id: "m1", chords: "F#m" };
+  const m2 = { id: "m2", chords: "Dmaj7 C#m7" };
+  const m3 = { id: "m3", chords: "Dmaj7 C#m7 B" };
+
+  const eval1 = evaluateMeasureBeats(m1, "4/4");
+  assert.equal(eval1.chordCount, 1);
+  assert.deepEqual(eval1.beatsPerChord, [4]);
+  assert.equal(eval1.summaryLabel, "4 tempos");
+  assert.equal(eval1.needsReview, false);
+
+  const eval2 = evaluateMeasureBeats(m2, "4/4");
+  assert.equal(eval2.chordCount, 2);
+  assert.deepEqual(eval2.beatsPerChord, [2, 2]);
+  assert.equal(eval2.summaryLabel, "2 + 2 tempos");
+  assert.equal(eval2.needsReview, false);
+
+  const eval3 = evaluateMeasureBeats(m3, "4/4");
+  assert.equal(eval3.chordCount, 3);
+  assert.equal(eval3.beatsPerChord, null);
+  assert.equal(eval3.needsReview, true);
+  assert.ok(eval3.warningMessage.includes("3 ou mais acordes"));
+
+  // Fora de 4/4 não inventa tempos de 4/4
+  const eval24 = evaluateMeasureBeats(m2, "2/4");
+  assert.equal(eval24.beatsPerChord, null);
+  assert.equal(eval24.needsReview, false);
+});
+
+test("histórico puro (undo): desfaz cada alteração preservando ordem e proveniência", () => {
+  const source = parseCifraSource(`Tom: A
+[A]
+F#m D7M C#m7 B E7`);
+  let draft = suggestChart(source, { timeSignature: "4/4" });
+  let history = createDraftHistory();
+
+  const secId = draft.sections[0].id;
+
+  // Passo 1: mover D7M para o compasso seguinte
+  history = pushDraftHistoryState(history, draft);
+  draft = moveChordBetweenMeasures(draft, secId, draft.sections[0].measures[0].id, 1, 1);
+  assert.deepEqual(
+    draft.sections[0].measures.map((m) => m.chords),
+    ["F#m", "Dmaj7 C#m7 B", "E7"]
+  );
+
+  // Passo 2: dividir no acorde B
+  history = pushDraftHistoryState(history, draft);
+  draft = splitMeasureAtChord(draft, secId, draft.sections[0].measures[1].id, 2);
+  assert.deepEqual(
+    draft.sections[0].measures.map((m) => m.chords),
+    ["F#m", "Dmaj7 C#m7", "B", "E7"]
+  );
+
+  // Desfazer Passo 2 -> volta para | F#m | Dmaj7 C#m7 B | E7 |
+  const undo1 = undoDraftHistoryState(history, draft);
+  assert.equal(undo1.undone, true);
+  draft = undo1.draft;
+  history = undo1.history;
+  assert.deepEqual(
+    draft.sections[0].measures.map((m) => m.chords),
+    ["F#m", "Dmaj7 C#m7 B", "E7"]
+  );
+  assert.equal(verifyDraftInvariants(draft, source).valid, true);
+
+  // Desfazer Passo 1 -> volta para | F#m Dmaj7 | C#m7 B | E7 |
+  const undo2 = undoDraftHistoryState(history, draft);
+  assert.equal(undo2.undone, true);
+  draft = undo2.draft;
+  history = undo2.history;
+  assert.deepEqual(
+    draft.sections[0].measures.map((m) => m.chords),
+    ["F#m Dmaj7", "C#m7 B", "E7"]
+  );
+  assert.equal(verifyDraftInvariants(draft, source).valid, true);
+
+  // Desfazer com histórico vazio mantém o rascunho intacto
+  const undoEmpty = undoDraftHistoryState(history, draft);
+  assert.equal(undoEmpty.undone, false);
+  assert.equal(undoEmpty.draft, draft);
 });
 
 test("mergeMeasures: une dois compassos adjacentes preservando a ordem dos acordes", () => {
