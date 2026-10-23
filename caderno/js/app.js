@@ -2,10 +2,17 @@ import {
   suggestChart,
   verifyDraftInvariants as verifyDraftInvariantsOriginal,
   updateDraftTimeSignature,
+  evaluateMeasureBeats,
   splitMeasure,
+  splitMeasureAtChord,
+  canMoveChordBetweenMeasures,
+  moveChordBetweenMeasures,
   mergeMeasures,
   moveMeasure,
   splitSection,
+  createDraftHistory,
+  pushDraftHistoryState,
+  undoDraftHistoryState,
   convertDraftToSong,
   validateDraftForConfirmation,
 } from "./draft.js";
@@ -78,8 +85,10 @@ const state = {
   confirm: null,
   wizard: null,
   currentDraft: null,
-  draftHistory: [],
+  draftHistory: createDraftHistory(),
   draftActiveTab: "chart",
+  selectedDraftChord: null,
+  draggedDraftChord: null,
 };
 
 const REPEAT_CYCLE = ["", "start", "end", "both"];
@@ -109,6 +118,74 @@ document.addEventListener("click", (event) => {
   if (!element || !actions[element.dataset.action]) return;
   event.preventDefault();
   actions[element.dataset.action](element);
+});
+
+document.addEventListener("dragstart", (event) => {
+  const token = event.target.closest?.(".measure-chord-token[draggable='true']");
+  if (!token) return;
+  state.draggedDraftChord = {
+    sectionId: token.dataset.sectionId,
+    measureId: token.dataset.measureId,
+    chordIndex: Number(token.dataset.chordIndex),
+  };
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", token.dataset.chordRaw || "");
+  }
+});
+
+document.addEventListener("dragover", (event) => {
+  if (!state.draggedDraftChord || !state.currentDraft) return;
+  const box = event.target.closest?.(".draft-measure-box");
+  if (!box) return;
+  const secCard = box.closest(".draft-section-card");
+  if (!secCard || secCard.dataset.sectionId !== state.draggedDraftChord.sectionId) return;
+  const sec = state.currentDraft.sections.find((s) => s.id === state.draggedDraftChord.sectionId);
+  if (!sec) return;
+  const fromIdx = sec.measures.findIndex((m) => m.id === state.draggedDraftChord.measureId);
+  const toIdx = sec.measures.findIndex((m) => m.id === box.dataset.measureId);
+  const dir = toIdx - fromIdx;
+  if (
+    (dir === -1 || dir === 1) &&
+    canMoveChordBetweenMeasures(
+      state.currentDraft,
+      state.draggedDraftChord.sectionId,
+      state.draggedDraftChord.measureId,
+      state.draggedDraftChord.chordIndex,
+      dir
+    )
+  ) {
+    event.preventDefault();
+    box.classList.add("drop-target");
+  }
+});
+
+document.addEventListener("dragleave", (event) => {
+  const box = event.target.closest?.(".draft-measure-box");
+  if (box) box.classList.remove("drop-target");
+});
+
+document.addEventListener("drop", (event) => {
+  if (!state.draggedDraftChord || !state.currentDraft) return;
+  const box = event.target.closest?.(".draft-measure-box");
+  const dragged = state.draggedDraftChord;
+  state.draggedDraftChord = null;
+  document.querySelectorAll(".draft-measure-box.drop-target").forEach((el) => el.classList.remove("drop-target"));
+  if (!box) return;
+  const sec = state.currentDraft.sections.find((s) => s.id === dragged.sectionId);
+  if (!sec) return;
+  const fromIdx = sec.measures.findIndex((m) => m.id === dragged.measureId);
+  const toIdx = sec.measures.findIndex((m) => m.id === box.dataset.measureId);
+  const dir = toIdx - fromIdx;
+  if (dir === -1 || dir === 1) {
+    event.preventDefault();
+    handleDraftMoveChord(dragged.sectionId, dragged.measureId, dragged.chordIndex, dir);
+  }
+});
+
+document.addEventListener("dragend", () => {
+  state.draggedDraftChord = null;
+  document.querySelectorAll(".draft-measure-box.drop-target").forEach((el) => el.classList.remove("drop-target"));
 });
 
 let orderDrag = null;
@@ -617,6 +694,25 @@ const actions = {
   "open-draft": () => openDraft(),
   "draft-set-timesig": (btn) => handleDraftTimeSig(btn.dataset.timesig),
   "draft-clear-timesig": () => handleDraftTimeSig(""),
+  "draft-select-chord": (btn) =>
+    handleDraftSelectChord(
+      btn.dataset.sectionId,
+      btn.dataset.measureId,
+      Number(btn.dataset.chordIndex)
+    ),
+  "draft-move-chord": (btn) =>
+    handleDraftMoveChord(
+      btn.dataset.sectionId,
+      btn.dataset.measureId,
+      Number(btn.dataset.chordIndex),
+      Number(btn.dataset.dir) || 0
+    ),
+  "draft-split-chord": (btn) =>
+    handleDraftSplitMeasure(
+      btn.dataset.sectionId,
+      btn.dataset.measureId,
+      Number(btn.dataset.chordIndex)
+    ),
   "draft-split-measure": (btn) => handleDraftSplitMeasure(btn.dataset.sectionId, btn.dataset.measureId),
   "draft-merge-measure": (btn) => handleDraftMergeMeasure(btn.dataset.sectionId, btn.dataset.measureId, btn.dataset.nextId),
   "draft-split-section": (btn) => handleDraftSplitSection(btn.dataset.sectionId),
@@ -1481,8 +1577,9 @@ async function openDraft() {
       pasteError("Nenhum acorde reconhecível foi encontrado no texto colado.");
       return;
     }
-    state.draftHistory = [];
+    state.draftHistory = createDraftHistory();
     state.draftActiveTab = "chart";
+    state.selectedDraftChord = null;
     state.currentDraft = suggestChart(source);
     renderDraftModal();
   } catch (err) {
@@ -1492,9 +1589,7 @@ async function openDraft() {
 
 function pushDraftHistory() {
   if (!state.currentDraft) return;
-  if (!state.draftHistory) state.draftHistory = [];
-  state.draftHistory.push(JSON.parse(JSON.stringify(state.currentDraft)));
-  if (state.draftHistory.length > 25) state.draftHistory.shift();
+  state.draftHistory = pushDraftHistoryState(state.draftHistory, state.currentDraft);
 }
 
 function handleDraftSwitchTab(tab) {
@@ -1503,10 +1598,64 @@ function handleDraftSwitchTab(tab) {
 }
 
 function handleDraftUndo() {
-  if (!state.draftHistory || !state.draftHistory.length) return;
-  state.currentDraft = state.draftHistory.pop();
+  if (!state.currentDraft) return;
+  const res = undoDraftHistoryState(state.draftHistory, state.currentDraft);
+  if (!res.undone) return;
+  state.currentDraft = res.draft;
+  state.draftHistory = res.history;
+  state.selectedDraftChord = null;
   renderDraftModal();
   toast("Ação desfeita.");
+}
+
+function handleDraftSelectChord(sectionId, measureId, chordIndex) {
+  if (!state.currentDraft || !Number.isInteger(chordIndex)) return;
+  const cur = state.selectedDraftChord;
+  if (
+    cur &&
+    cur.sectionId === sectionId &&
+    cur.measureId === measureId &&
+    cur.chordIndex === chordIndex
+  ) {
+    state.selectedDraftChord = null;
+  } else {
+    state.selectedDraftChord = { sectionId, measureId, chordIndex };
+  }
+  renderDraftModal();
+}
+
+function handleDraftMoveChord(sectionId, measureId, chordIndex, dir) {
+  if (!state.currentDraft) return;
+  if (!canMoveChordBetweenMeasures(state.currentDraft, sectionId, measureId, chordIndex, dir)) {
+    return;
+  }
+  const secBefore = state.currentDraft.sections.find((s) => s.id === sectionId);
+  const measureIdxBefore = secBefore ? secBefore.measures.findIndex((m) => m.id === measureId) : -1;
+  const neighborMeasureBefore =
+    secBefore && measureIdxBefore !== -1 ? secBefore.measures[measureIdxBefore + dir] : null;
+  const neighborId = neighborMeasureBefore ? neighborMeasureBefore.id : null;
+  const neighborLenBefore = neighborMeasureBefore?.sourceChords?.length || 0;
+
+  pushDraftHistory();
+  state.currentDraft = moveChordBetweenMeasures(
+    state.currentDraft,
+    sectionId,
+    measureId,
+    chordIndex,
+    dir
+  );
+
+  if (neighborId) {
+    const newChordIndex = dir === -1 ? neighborLenBefore : 0;
+    state.selectedDraftChord = {
+      sectionId,
+      measureId: neighborId,
+      chordIndex: newChordIndex,
+    };
+  } else {
+    state.selectedDraftChord = null;
+  }
+  renderDraftModal();
 }
 
 function handleDraftTimeSig(newSig) {
@@ -1516,10 +1665,23 @@ function handleDraftTimeSig(newSig) {
   renderDraftModal();
 }
 
-function handleDraftSplitMeasure(sectionId, measureId) {
+function handleDraftSplitMeasure(sectionId, measureId, explicitChordIndex) {
   if (!state.currentDraft) return;
+  const selectedInMeasure =
+    Number.isInteger(explicitChordIndex) && explicitChordIndex >= 0
+      ? explicitChordIndex
+      : state.selectedDraftChord &&
+          state.selectedDraftChord.sectionId === sectionId &&
+          state.selectedDraftChord.measureId === measureId
+        ? state.selectedDraftChord.chordIndex
+        : null;
+
   pushDraftHistory();
-  state.currentDraft = splitMeasure(state.currentDraft, sectionId, measureId);
+  state.currentDraft =
+    selectedInMeasure !== null
+      ? splitMeasureAtChord(state.currentDraft, sectionId, measureId, selectedInMeasure)
+      : splitMeasure(state.currentDraft, sectionId, measureId);
+  state.selectedDraftChord = null;
   renderDraftModal();
 }
 
@@ -1527,6 +1689,7 @@ function handleDraftMergeMeasure(sectionId, measureId, nextId) {
   if (!state.currentDraft) return;
   pushDraftHistory();
   state.currentDraft = mergeMeasures(state.currentDraft, sectionId, measureId, nextId);
+  state.selectedDraftChord = null;
   renderDraftModal();
 }
 
@@ -1596,14 +1759,16 @@ function confirmDraft() {
   }
 
   state.currentDraft = null;
-  state.draftHistory = [];
+  state.draftHistory = createDraftHistory();
+  state.selectedDraftChord = null;
   closeModal();
   renderMain();
 }
 
 function cancelDraft() {
   state.currentDraft = null;
-  state.draftHistory = [];
+  state.draftHistory = createDraftHistory();
+  state.selectedDraftChord = null;
   closeModal();
   toast("Rascunho cancelado. Nenhuma alteração salva.");
 }
@@ -1642,9 +1807,14 @@ function renderDraftModal() {
   const draft = state.currentDraft;
   if (!draft) return;
 
+  const prevModal = modalRoot.querySelector(".modal");
+  const prevChartCol = modalRoot.querySelector(".draft-chart-column");
+  const prevModalScroll = prevModal ? prevModal.scrollTop : 0;
+  const prevChartScroll = prevChartCol ? prevChartCol.scrollTop : 0;
+
   const inv = verifyDraftInvariantsOriginal(draft);
   const activeTab = state.draftActiveTab || "chart";
-  const hasHistory = Boolean(state.draftHistory && state.draftHistory.length);
+  const hasHistory = Boolean(state.draftHistory?.past?.length);
 
   const timeSigBanner = !draft.timeSignature
     ? `<div class="draft-warning-banner" id="draft-time-sig-banner">
@@ -1677,25 +1847,76 @@ function renderDraftModal() {
       contentHtml = `<pre class="tab-view">${esc(sec.tabContent || "")}</pre>`;
     } else {
       const measuresHtml = sec.measures.map((m, mIdx) => {
-        const canSplit = (m.sourceChords && m.sourceChords.length > 1) || m.chords.includes(" ");
+        const chordsList =
+          Array.isArray(m.sourceChords) && m.sourceChords.length > 0
+            ? m.sourceChords
+            : String(m.chords || "")
+                .trim()
+                .split(/\s+/)
+                .filter(Boolean)
+                .map((tok) => ({ raw: tok, normalized: tok }));
+        const canSplit = chordsList.length > 1;
         const nextMeasure = sec.measures[mIdx + 1];
+        const beatEval = evaluateMeasureBeats(m, draft.timeSignature);
+        const selectedIdx =
+          state.selectedDraftChord &&
+          state.selectedDraftChord.sectionId === sec.id &&
+          state.selectedDraftChord.measureId === m.id &&
+          state.selectedDraftChord.chordIndex < chordsList.length
+            ? state.selectedDraftChord.chordIndex
+            : null;
+        const selectedChordObj = selectedIdx !== null ? chordsList[selectedIdx] : null;
+        const selectedChordLabel = selectedChordObj
+          ? selectedChordObj.raw || selectedChordObj.normalized
+          : "";
+
+        const chordTokensHtml = chordsList.length
+          ? chordsList
+              .map((c, cIdx) => {
+                const chordLabel = c.raw || c.normalized;
+                const isSelected = selectedIdx === cIdx;
+                const canDrag =
+                  canMoveChordBetweenMeasures(draft, sec.id, m.id, cIdx, -1) ||
+                  canMoveChordBetweenMeasures(draft, sec.id, m.id, cIdx, 1);
+                return `<button type="button" class="measure-chord-token ${isSelected ? "is-selected" : ""}" data-action="draft-select-chord" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-chord-index="${cIdx}" data-chord-raw="${esc(chordLabel)}" data-chord-normalized="${esc(c.normalized || chordLabel)}" aria-pressed="${isSelected ? "true" : "false"}" draggable="${canDrag ? "true" : "false"}" title="Selecionar acorde ${esc(chordLabel)}">${esc(chordLabel)}</button>`;
+              })
+              .join(" ")
+          : "—";
+
+        const beatMetaHtml = beatEval.summaryLabel
+          ? `<div class="measure-beat-meta ${beatEval.needsReview ? "measure-beat-warning" : ""}" data-beat-status="${beatEval.needsReview ? "review" : "ok"}">${beatEval.needsReview ? `⚠ ${esc(beatEval.summaryLabel)} (${beatEval.chordCount} acordes)` : esc(beatEval.summaryLabel)}</div>`
+          : "";
+
+        let chordActionsHtml = "";
+        if (selectedIdx !== null) {
+          const canChordLeft = canMoveChordBetweenMeasures(draft, sec.id, m.id, selectedIdx, -1);
+          const canChordRight = canMoveChordBetweenMeasures(draft, sec.id, m.id, selectedIdx, 1);
+          const moveLeftBtn = `<button type="button" class="btn ghost micro" data-action="draft-move-chord" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-chord-index="${selectedIdx}" data-dir="-1" ${canChordLeft ? "" : "disabled"} title="${canChordLeft ? `Mover acorde ${esc(selectedChordLabel)} para o compasso anterior` : "Apenas o primeiro acorde do compasso pode ir para o compasso anterior sem alterar a ordem musical"}" aria-label="Mover acorde ${esc(selectedChordLabel)} para o compasso anterior">← Acorde</button>`;
+          const splitAtChordBtn = canSplit
+            ? `<button type="button" class="btn ghost micro" data-action="draft-split-chord" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-chord-index="${selectedIdx}" title="Dividir compasso usando ${esc(selectedChordLabel)} como fronteira" aria-label="Dividir no acorde ${esc(selectedChordLabel)}">✂ Dividir aqui</button>`
+            : "";
+          const moveRightBtn = `<button type="button" class="btn ghost micro" data-action="draft-move-chord" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-chord-index="${selectedIdx}" data-dir="1" ${canChordRight ? "" : "disabled"} title="${canChordRight ? `Mover acorde ${esc(selectedChordLabel)} para o compasso seguinte` : "Apenas o último acorde do compasso pode ir para o compasso seguinte sem alterar a ordem musical"}" aria-label="Mover acorde ${esc(selectedChordLabel)} para o compasso seguinte">Acorde →</button>`;
+          chordActionsHtml = `<div class="measure-chord-actions" role="group" aria-label="Ações do acorde ${esc(selectedChordLabel)}">${moveLeftBtn}${splitAtChordBtn}${moveRightBtn}</div>`;
+        }
 
         const prevBtn = mIdx > 0
-          ? `<button type="button" class="btn ghost micro" data-action="draft-move-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-dir="-1" title="Mover para esquerda" aria-label="Mover compasso para esquerda">◀</button>`
+          ? `<button type="button" class="btn ghost micro" data-action="draft-move-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-dir="-1" title="Mover compasso inteiro para esquerda" aria-label="Mover compasso para esquerda">◀</button>`
           : "";
         const nextBtn = mIdx < sec.measures.length - 1
-          ? `<button type="button" class="btn ghost micro" data-action="draft-move-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-dir="1" title="Mover para direita" aria-label="Mover compasso para direita">▶</button>`
+          ? `<button type="button" class="btn ghost micro" data-action="draft-move-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-dir="1" title="Mover compasso inteiro para direita" aria-label="Mover compasso para direita">▶</button>`
           : "";
         const splitBtn = canSplit
-          ? `<button type="button" class="btn ghost micro" data-action="draft-split-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" title="Dividir compasso">✂ Dividir</button>`
+          ? `<button type="button" class="btn ghost micro" data-action="draft-split-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" title="${selectedIdx !== null ? `Dividir compasso usando ${esc(selectedChordLabel)} como fronteira` : "Dividir compasso"}">✂ Dividir</button>`
           : "";
         const mergeBtn = nextMeasure
           ? `<button type="button" class="btn ghost micro" data-action="draft-merge-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-next-id="${esc(nextMeasure.id)}" title="Unir com próximo">🔗 Unir</button>`
           : "";
 
-        return `<div class="draft-measure-box" data-measure-id="${esc(m.id)}">
-          <span class="measure-chords">${esc(m.chords || "—")}</span>
-          <div class="measure-actions">${prevBtn}${nextBtn}${splitBtn}${mergeBtn}</div>
+        return `<div class="draft-measure-box ${beatEval.needsReview ? "measure-needs-review" : ""} ${selectedIdx !== null ? "has-selected-chord" : ""}" data-measure-id="${esc(m.id)}" data-needs-review="${beatEval.needsReview ? "true" : "false"}">
+          <div class="measure-chords" role="group" aria-label="Acordes do compasso ${mIdx + 1}">${chordTokensHtml}</div>
+          ${beatMetaHtml}
+          ${chordActionsHtml}
+          <div class="measure-actions" role="group" aria-label="Ações do compasso ${mIdx + 1}">${prevBtn}${nextBtn}${splitBtn}${mergeBtn}</div>
         </div>`;
       }).join("");
 
@@ -1737,7 +1958,7 @@ function renderDraftModal() {
         ${errorBanner}
         ${warningsHtml}
         <div style="margin: 12px 0;">
-          <p class="meta"><strong>Estrutura:</strong> ${draft.sections.length} seção(ões), ${totalMeasures} compasso(s). ${inv.valid ? "✓ Invariantes conferidos" : "⚠ Atenção aos invariantes"}</p>
+          <p class="meta"><strong>Estrutura:</strong> ${draft.sections.length} seção(ões), ${totalMeasures} compasso(s). ${inv.valid ? "✓ Invariantes conferidos" : "⚠ Atenção aos invariantes"} · <span class="draft-chord-hint">Toque em um acorde para movê-lo entre compassos ou dividir a partir dele.</span></p>
           ${sectionsHtml}
         </div>
       </div>
@@ -1748,6 +1969,11 @@ function renderDraftModal() {
       <button class="btn ghost" type="button" data-action="draft-cancel">Cancelar rascunho</button>
     </div>
   </div>`);
+
+  const nextModal = modalRoot.querySelector(".modal");
+  const nextChartCol = modalRoot.querySelector(".draft-chart-column");
+  if (nextModal && prevModalScroll) nextModal.scrollTop = prevModalScroll;
+  if (nextChartCol && prevChartScroll) nextChartCol.scrollTop = prevChartScroll;
 }
 
 function chartHasChords(song) {
