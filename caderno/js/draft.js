@@ -54,6 +54,121 @@ import { uid, blankSong } from "./store.js";
  */
 
 /**
+ * @typedef {Object} MeasureBeatEvaluation
+ * @property {number} chordCount
+ * @property {number[] | null} beatsPerChord
+ * @property {string} summaryLabel
+ * @property {boolean} needsReview
+ * @property {string} warningMessage
+ */
+
+/**
+ * @typedef {Object} DraftHistory
+ * @property {ImportDraft[]} past
+ * @property {number} limit
+ */
+
+/**
+ * Avalia a ocupação de tempos de um compasso de acordo com a fórmula de compasso.
+ * Em 4/4:
+ * - 1 acorde ocupa 4 tempos ([4])
+ * - 2 acordes ocupam 2 tempos cada ([2, 2])
+ * - 3 ou mais acordes recebem aviso para conferência, sem duração inventada (null)
+ *
+ * @param {DraftMeasure | { chords?: string, sourceChords?: SourceChord[] }} measure
+ * @param {string} [timeSignature]
+ * @returns {MeasureBeatEvaluation}
+ */
+export function evaluateMeasureBeats(measure, timeSignature = "") {
+  const normalizedTimeSig = String(timeSignature || "").trim();
+  const chordTokens = Array.isArray(measure?.sourceChords) && measure.sourceChords.length > 0
+    ? measure.sourceChords.map((c) => c.normalized || c.raw).filter(Boolean)
+    : String(measure?.chords || "")
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean);
+  const chordCount = chordTokens.length;
+
+  if (normalizedTimeSig !== "4/4" || chordCount === 0) {
+    return {
+      chordCount,
+      beatsPerChord: null,
+      summaryLabel: "",
+      needsReview: false,
+      warningMessage: "",
+    };
+  }
+
+  if (chordCount === 1) {
+    return {
+      chordCount: 1,
+      beatsPerChord: [4],
+      summaryLabel: "4 tempos",
+      needsReview: false,
+      warningMessage: "",
+    };
+  }
+
+  if (chordCount === 2) {
+    return {
+      chordCount: 2,
+      beatsPerChord: [2, 2],
+      summaryLabel: "2 + 2 tempos",
+      needsReview: false,
+      warningMessage: "",
+    };
+  }
+
+  return {
+    chordCount,
+    beatsPerChord: null,
+    summaryLabel: "Conferir divisão",
+    needsReview: true,
+    warningMessage:
+      "Compasso em 4/4 com 3 ou mais acordes: confira a divisão sem duração inventada.",
+  };
+}
+
+/**
+ * Recalcula avisos dependentes dos compassos (como MEASURE_CHORD_COUNT_REVIEW em 4/4),
+ * preservando os demais avisos estruturais do rascunho.
+ *
+ * @param {ImportDraft} draft
+ * @returns {ImportDraft}
+ */
+export function syncDraftMeasureWarnings(draft) {
+  if (!draft || typeof draft !== "object") return draft;
+
+  const baseWarnings = Array.isArray(draft.warnings)
+    ? draft.warnings.filter((w) => w.code !== "MEASURE_CHORD_COUNT_REVIEW")
+    : [];
+
+  const measureWarnings = [];
+  if (String(draft.timeSignature || "").trim() === "4/4" && Array.isArray(draft.sections)) {
+    for (const sec of draft.sections) {
+      if (sec.kind !== "chords" || !Array.isArray(sec.measures)) continue;
+      for (let mIdx = 0; mIdx < sec.measures.length; mIdx += 1) {
+        const meas = sec.measures[mIdx];
+        const evalRes = evaluateMeasureBeats(meas, draft.timeSignature);
+        if (evalRes.needsReview) {
+          measureWarnings.push({
+            code: "MEASURE_CHORD_COUNT_REVIEW",
+            message: `Seção '${sec.label}', compasso ${mIdx + 1} (${meas.chords}) possui ${evalRes.chordCount} acordes em 4/4: confira ou divida os acordes.`,
+            sectionId: sec.id,
+            measureId: meas.id,
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    ...draft,
+    warnings: [...baseWarnings, ...measureWarnings],
+  };
+}
+
+/**
  * Gera uma sugestão musical editável (ImportDraft) a partir de uma CifraSource literal.
  * Não inventa fórmula de compasso se ela não foi informada na fonte.
  *
@@ -267,7 +382,7 @@ export function suggestChart(sourceInput, options = {}) {
     sourceSnapshot: source,
   };
 
-  return draft;
+  return syncDraftMeasureWarnings(draft);
 }
 
 /**
@@ -310,8 +425,16 @@ export function verifyDraftInvariants(draft, expectedSource) {
       );
     } else {
       for (let ci = 0; ci < collected.length; ci += 1) {
-        if (collected[ci] !== source.allChords[ci]) {
-          errors.push(`Divergência de acorde no índice ${ci}: ${collected[ci]?.raw} !== ${source.allChords[ci]?.raw}`);
+        const actual = collected[ci];
+        const expected = source.allChords[ci];
+        const sameChord =
+          actual === expected ||
+          (Boolean(actual) &&
+            Boolean(expected) &&
+            actual.raw === expected.raw &&
+            actual.normalized === expected.normalized);
+        if (!sameChord) {
+          errors.push(`Divergência de acorde no índice ${ci}: ${actual?.raw} !== ${expected?.raw}`);
           break;
         }
       }
@@ -326,7 +449,7 @@ export function verifyDraftInvariants(draft, expectedSource) {
 
 /**
  * Atualiza a fórmula de compasso do rascunho de forma pura.
- * Remove aviso NO_TIME_SIGNATURE quando um valor é definido.
+ * Remove aviso NO_TIME_SIGNATURE quando um valor é definido e recalcula avisos de compasso.
  *
  * @param {ImportDraft} draft
  * @param {string} newTimeSig
@@ -336,16 +459,16 @@ export function updateDraftTimeSignature(draft, newTimeSig) {
   const timeSignature = String(newTimeSig || "").trim();
   const warnings = draft.warnings.filter((w) => !(w.code === "NO_TIME_SIGNATURE" && timeSignature));
 
-  return {
+  return syncDraftMeasureWarnings({
     ...draft,
     timeSignature,
     warnings,
-  };
+  });
 }
 
 /**
- * Divide um compasso em dois.
- * Se o compasso tiver mais de um acorde, divide a lista de acordes no splitIndex.
+ * Divide um compasso em dois usando o índice informado como fronteira.
+ * Se splitIndex <= 0 em um compasso com múltiplos acordes, usa 1 (separa o primeiro acorde dos demais).
  * Se tiver apenas um acorde ou estiver vazio, mantém no primeiro e cria um compasso vazio como segundo.
  *
  * @param {ImportDraft} draft
@@ -363,8 +486,14 @@ export function splitMeasure(draft, sectionId, measureId, splitIndex = 1) {
     const target = sec.measures[measureIndex];
     const sourceChords = target.sourceChords || [];
 
-    const firstSourceChords = sourceChords.slice(0, splitIndex);
-    const secondSourceChords = sourceChords.slice(splitIndex);
+    const requestedIndex = Number.isInteger(splitIndex) ? splitIndex : 1;
+    const effectiveSplitIndex =
+      sourceChords.length > 1
+        ? Math.min(Math.max(requestedIndex, 1), sourceChords.length - 1)
+        : 1;
+
+    const firstSourceChords = sourceChords.slice(0, effectiveSplitIndex);
+    const secondSourceChords = sourceChords.slice(effectiveSplitIndex);
 
     const firstMeasure = {
       ...target,
@@ -390,10 +519,137 @@ export function splitMeasure(draft, sectionId, measureId, splitIndex = 1) {
     };
   });
 
-  return {
+  return syncDraftMeasureWarnings({
     ...draft,
     sections,
-  };
+  });
+}
+
+/**
+ * Divide um compasso usando o acorde selecionado como fronteira.
+ * Quando chordIndex > 0, o acorde selecionado inicia o novo compasso;
+ * quando chordIndex === 0, o primeiro acorde permanece no compasso atual e os demais vão para o novo compasso.
+ *
+ * @param {ImportDraft} draft
+ * @param {string} sectionId
+ * @param {string} measureId
+ * @param {number} [chordIndex=1]
+ * @returns {ImportDraft}
+ */
+export function splitMeasureAtChord(draft, sectionId, measureId, chordIndex = 1) {
+  const boundary = Number.isInteger(chordIndex) && chordIndex > 0 ? chordIndex : 1;
+  return splitMeasure(draft, sectionId, measureId, boundary);
+}
+
+/**
+ * Verifica se o acorde selecionado pode ser movido isoladamente para o compasso adjacente
+ * sem alterar a ordem linear da música.
+ *
+ * @param {ImportDraft} draft
+ * @param {string} sectionId
+ * @param {string} measureId
+ * @param {number} chordIndex
+ * @param {-1 | 1 | number} direction
+ * @returns {boolean}
+ */
+export function canMoveChordBetweenMeasures(draft, sectionId, measureId, chordIndex, direction) {
+  if (!draft || !Array.isArray(draft.sections)) return false;
+  if (direction !== -1 && direction !== 1) return false;
+
+  const sec = draft.sections.find((s) => s.id === sectionId);
+  if (!sec || !Array.isArray(sec.measures)) return false;
+
+  const measureIndex = sec.measures.findIndex((m) => m.id === measureId);
+  if (measureIndex === -1) return false;
+
+  const target = sec.measures[measureIndex];
+  const sourceChords = target.sourceChords || [];
+  if (!Number.isInteger(chordIndex) || chordIndex < 0 || chordIndex >= sourceChords.length) {
+    return false;
+  }
+
+  const targetMeasureIndex = measureIndex + direction;
+  if (targetMeasureIndex < 0 || targetMeasureIndex >= sec.measures.length) {
+    return false;
+  }
+
+  if (direction === -1) {
+    return chordIndex === 0;
+  }
+
+  return chordIndex === sourceChords.length - 1;
+}
+
+/**
+ * Move isoladamente o acorde selecionado para o compasso anterior (direction = -1)
+ * ou seguinte (direction = 1), preservando a ordem global e a proveniência dos acordes.
+ * Se o compasso de origem tinha apenas 1 acorde, ele é absorvido na fronteira adjacente.
+ *
+ * @param {ImportDraft} draft
+ * @param {string} sectionId
+ * @param {string} measureId
+ * @param {number} chordIndex
+ * @param {-1 | 1 | number} direction
+ * @returns {ImportDraft}
+ */
+export function moveChordBetweenMeasures(draft, sectionId, measureId, chordIndex, direction) {
+  if (!canMoveChordBetweenMeasures(draft, sectionId, measureId, chordIndex, direction)) {
+    return draft;
+  }
+
+  const sections = draft.sections.map((sec) => {
+    if (sec.id !== sectionId) return sec;
+
+    const measureIndex = sec.measures.findIndex((m) => m.id === measureId);
+    const neighborIndex = measureIndex + direction;
+    const currentMeasure = sec.measures[measureIndex];
+    const neighborMeasure = sec.measures[neighborIndex];
+
+    const currentChords = [...(currentMeasure.sourceChords || [])];
+    const [movedChord] = currentChords.splice(chordIndex, 1);
+    const neighborChords =
+      direction === -1
+        ? [...(neighborMeasure.sourceChords || []), movedChord]
+        : [movedChord, ...(neighborMeasure.sourceChords || [])];
+
+    const updatedNeighbor = {
+      ...neighborMeasure,
+      chords: neighborChords.map((c) => c.normalized).join(" "),
+      sourceChords: neighborChords,
+    };
+
+    const newMeasures = [...sec.measures];
+    newMeasures[neighborIndex] = updatedNeighbor;
+
+    if (currentChords.length === 0) {
+      // Preserva marcadores de repetição/casa se o compasso esvaziado os possuía
+      if (currentMeasure.repeat === "start" && !updatedNeighbor.repeat) {
+        newMeasures[neighborIndex] = { ...updatedNeighbor, repeat: "start" };
+      } else if (currentMeasure.repeat === "end" && !updatedNeighbor.repeat) {
+        newMeasures[neighborIndex] = { ...updatedNeighbor, repeat: "end" };
+      }
+      if (currentMeasure.ending && !updatedNeighbor.ending) {
+        newMeasures[neighborIndex] = { ...newMeasures[neighborIndex], ending: currentMeasure.ending };
+      }
+      newMeasures.splice(measureIndex, 1);
+    } else {
+      newMeasures[measureIndex] = {
+        ...currentMeasure,
+        chords: currentChords.map((c) => c.normalized).join(" "),
+        sourceChords: currentChords,
+      };
+    }
+
+    return {
+      ...sec,
+      measures: newMeasures,
+    };
+  });
+
+  return syncDraftMeasureWarnings({
+    ...draft,
+    sections,
+  });
 }
 
 /**
@@ -445,10 +701,10 @@ export function mergeMeasures(draft, sectionId, measureId1, measureId2) {
     };
   });
 
-  return {
+  return syncDraftMeasureWarnings({
     ...draft,
     sections,
-  };
+  });
 }
 
 /**
@@ -486,10 +742,10 @@ export function moveMeasure(draft, sourceSectionId, measureId, targetSectionId, 
     return { ...sec, measures: newMeasures };
   });
 
-  return {
+  return syncDraftMeasureWarnings({
     ...draft,
     sections,
-  };
+  });
 }
 
 /**
@@ -520,10 +776,10 @@ export function splitSection(draft, sectionId, atMeasureIndex, newLabel = "B") {
   const sections = [...draft.sections];
   sections.splice(sectionIdx, 1, sec1, sec2);
 
-  return {
+  return syncDraftMeasureWarnings({
     ...draft,
     sections,
-  };
+  });
 }
 
 /**
@@ -553,9 +809,98 @@ export function mergeSections(draft, sectionId1, sectionId2) {
   sections.splice(maxIdx, 1);
   sections.splice(minIdx, 1, merged);
 
-  return {
+  return syncDraftMeasureWarnings({
     ...draft,
     sections,
+  });
+}
+
+/**
+ * Clona um ImportDraft preservando as referências imutáveis de SourceChord e sourceSnapshot.
+ *
+ * @param {ImportDraft} draft
+ * @returns {ImportDraft}
+ */
+export function cloneDraftState(draft) {
+  if (!draft || typeof draft !== "object") return draft;
+  return {
+    ...draft,
+    sections: Array.isArray(draft.sections)
+      ? draft.sections.map((sec) => ({
+          ...sec,
+          measures: Array.isArray(sec.measures)
+            ? sec.measures.map((m) => ({
+                ...m,
+                sourceChords: Array.isArray(m.sourceChords) ? [...m.sourceChords] : [],
+              }))
+            : [],
+        }))
+      : [],
+    warnings: Array.isArray(draft.warnings) ? draft.warnings.map((w) => ({ ...w })) : [],
+    exclusions: Array.isArray(draft.exclusions) ? draft.exclusions.map((e) => ({ ...e })) : [],
+    sourceSnapshot: draft.sourceSnapshot,
+  };
+}
+
+/**
+ * Cria uma estrutura pura de histórico de edições do rascunho.
+ *
+ * @param {number} [limit=25]
+ * @returns {DraftHistory}
+ */
+export function createDraftHistory(limit = 25) {
+  return {
+    past: [],
+    limit: Number.isInteger(limit) && limit > 0 ? limit : 25,
+  };
+}
+
+/**
+ * Empilha um snapshot do rascunho no histórico antes de uma alteração.
+ *
+ * @param {DraftHistory} history
+ * @param {ImportDraft} draft
+ * @returns {DraftHistory}
+ */
+export function pushDraftHistoryState(history, draft) {
+  const safeHistory = history && Array.isArray(history.past) ? history : createDraftHistory();
+  if (!draft) return safeHistory;
+  const nextPast = [...safeHistory.past, cloneDraftState(draft)];
+  if (nextPast.length > safeHistory.limit) {
+    nextPast.shift();
+  }
+  return {
+    ...safeHistory,
+    past: nextPast,
+  };
+}
+
+/**
+ * Desfaz a última alteração do rascunho a partir do histórico puro.
+ *
+ * @param {DraftHistory} history
+ * @param {ImportDraft} currentDraft
+ * @returns {{ draft: ImportDraft, history: DraftHistory, undone: boolean }}
+ */
+export function undoDraftHistoryState(history, currentDraft) {
+  const safeHistory = history && Array.isArray(history.past) ? history : createDraftHistory();
+  if (safeHistory.past.length === 0) {
+    return {
+      draft: currentDraft,
+      history: safeHistory,
+      undone: false,
+    };
+  }
+
+  const nextPast = [...safeHistory.past];
+  const previousDraft = nextPast.pop();
+  return {
+    draft: cloneDraftState(previousDraft),
+    history: {
+      ...safeHistory,
+      past: nextPast,
+    },
+    undone: true,
   };
 }
 
