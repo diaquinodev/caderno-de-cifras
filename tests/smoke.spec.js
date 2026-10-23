@@ -1585,4 +1585,98 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
 
     expect(errors).toEqual([]);
   });
+
+  test("fase 20: interface de sugestão de repetições (aceitar, manter completo, expandir e desfazer) em celular, tablet e notebook", async ({ page }) => {
+    const errors = await setupPage(page, { seedPdf: false });
+
+    const repeatedCifra = `Título: Choro da Repetição
+Artista: Conjunto Regional
+Tom: C
+
+[Parte A]
+| Cmaj7 | Dm7 G7 | Em7 A7 | Dm7 G7 |
+| Cmaj7 | Dm7 G7 | Em7 A7 | Dm7 G7 |
+
+[Parte B]
+| Fmaj7 | Fm6 | Cmaj7 | A7 |
+| Fmaj7 | Fm6 | Cmaj7 | A7 |`;
+
+    await gotoRoute(page, "#/musicas");
+    await page.click('[data-action="new-song"]');
+
+    for (const vp of [
+      { width: 390, height: 844 },
+      { width: 768, height: 1024 },
+      { width: 1366, height: 768 },
+    ]) {
+      await page.setViewportSize(vp);
+      await page.click('[data-action="open-paste"]');
+      await page.fill("#paste-text", repeatedCifra);
+      await page.click('[data-action="open-draft"]');
+
+      await expect(page.locator("#draft-title")).toBeVisible();
+      await expect(page.locator(".draft-repeat-suggestion")).toHaveCount(2);
+
+      // Verifica alvo de toque >= 44px nos botões de repetição
+      const firstApplyBtn = page.locator('[data-action="draft-apply-repeat"]').first();
+      const firstDismissBtn = page.locator('[data-action="draft-dismiss-repeat"]').first();
+      const applyBox = await firstApplyBtn.boundingBox();
+      const dismissBox = await firstDismissBtn.boundingBox();
+      expect(applyBox.height).toBeGreaterThanOrEqual(44);
+      expect(applyBox.width).toBeGreaterThanOrEqual(44);
+      expect(dismissBox.height).toBeGreaterThanOrEqual(44);
+      expect(dismissBox.width).toBeGreaterThanOrEqual(44);
+
+      // 1. Aceitar ("Compactar como 2x") na Parte A
+      await firstApplyBtn.click();
+      const secA = page.locator(".draft-section-card").first();
+      await expect(secA).toHaveAttribute("data-compacted", "true");
+      await expect(secA.locator(".draft-repeat-compacted-banner")).toContainText("Compactada como 2x");
+      await expect(secA.locator(".draft-measure-box")).toHaveCount(4);
+      await expect(secA.locator(".draft-measure-box").first()).toHaveAttribute("data-repeat", "start");
+      await expect(secA.locator(".draft-measure-box").nth(3)).toHaveAttribute("data-repeat", "end");
+      await expect(page.locator("#draft-repeat-live")).toContainText("Repetição compactada como 2x");
+
+      // 2. Ignorar ("Manter completo") na Parte B
+      await page.locator('[data-action="draft-dismiss-repeat"]').first().click();
+      const secB = page.locator(".draft-section-card").nth(1);
+      await expect(secB).toHaveAttribute("data-compacted", "false");
+      await expect(secB.locator(".draft-measure-box")).toHaveCount(8);
+      await expect(page.locator(".draft-repeat-suggestion")).toHaveCount(0);
+
+      // 3. Desfazer o "Manter completo" -> sugestão da Parte B reaparece
+      await page.click("#btn-draft-undo");
+      await expect(page.locator(".draft-repeat-suggestion")).toHaveCount(1);
+
+      // 4. Expandir a Parte A -> restaura os 8 compassos visíveis e libera edição estrutural
+      await secA.locator('[data-action="draft-expand-repeat"]').click();
+      await expect(secA).toHaveAttribute("data-compacted", "false");
+      await expect(secA.locator(".draft-measure-box")).toHaveCount(8);
+      await expect(page.locator(".draft-repeat-suggestion")).toHaveCount(2);
+
+      await page.click('[data-action="draft-cancel"]');
+    }
+
+    // Fluxo final de confirmação: compactar Parte A, manter Parte B completa, escolher 4/4 e salvar
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await page.click('[data-action="open-paste"]');
+    await page.fill("#paste-text", repeatedCifra);
+    await page.click('[data-action="open-draft"]');
+    await page.click('[data-action="draft-set-timesig"][data-timesig="4/4"]');
+    await page.locator('[data-action="draft-apply-repeat"]').first().click();
+
+    // Fonte literal permanece com 100% dos acordes (22 acordes)
+    await expect(page.locator(".draft-source-column")).toContainText("22 acorde(s) literais");
+
+    await page.click("#btn-draft-confirm");
+    await expect(page.locator("input.sheet-title")).toHaveValue("Choro da Repetição");
+
+    // Na cifra final salva, Parte A tem 4 compassos com repeat start/end e Parte B tem 8 compassos completos
+    const firstSectionBars = page.locator("#paper-body .bar");
+    await expect(firstSectionBars).toHaveCount(12);
+    await expect(firstSectionBars.first()).toHaveClass(/repeat-start/);
+    await expect(firstSectionBars.nth(3)).toHaveClass(/repeat-end/);
+
+    expect(errors).toEqual([]);
+  });
 });
