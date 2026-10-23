@@ -347,6 +347,27 @@ body.clean .video-dock { display: none; }
   flex: 0 0 auto;
   height: calc(74 * var(--u));
 }
+.staff-line.adaptive-system {
+  --bars: 4;
+}
+.staff-line.adaptive-system .bar.adaptive-bar {
+  width: calc(var(--cell-span) * 6.25%);
+}
+.adaptive-section-marker {
+  position: absolute;
+  z-index: 2;
+  left: calc(4 * var(--u));
+  top: calc(-13 * var(--u));
+  max-width: calc(100% - calc(8 * var(--u)));
+  overflow: hidden;
+  color: #EB4E3E;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: calc(11 * var(--u));
+  font-weight: 700;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .bar::before {
   content: "";
   position: absolute;

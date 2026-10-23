@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  composeChartRows,
+  canUseCompactDensity,
+  composeChartLayout,
   composePageSpread,
-  getChartPageCount,
+  composeChartSystems,
+  flattenChartMeasures,
   normalizeSpreadPage,
-  paginateChart,
+  paginateChartSystems,
   resolveReadingLayoutProfile,
 } from "./chart-pages.js";
 
@@ -24,109 +26,126 @@ function song(sectionSizes, barsPerRow = 4) {
   };
 }
 
-function measureIds(pages) {
-  return pages.flatMap((page) => page.sections.flatMap((section) => section.rows.flatMap((row) => row.measures.map((measure) => measure.id))));
+function adaptiveMeasureIds(layout) {
+  return layout.pages.flatMap((page) =>
+    page.systems.flatMap((system) => system.placements.map((placement) => placement.atom.measureId))
+  );
 }
 
-test("composeChartRows preserva ordem e cria linhas conforme barsPerRow", () => {
-  const chart = song([5, 3], 4);
-  const rows = composeChartRows(chart);
+test("flattenChartMeasures preserva ordem e separa seções legadas com IDs repetidos", () => {
+  const chart = song([2, 2]);
+  chart.sections[0].id = "repetido";
+  chart.sections[1].id = "repetido";
 
-  assert.deepEqual(rows.map((row) => row.measures.map((measure) => measure.id)), [
-    ["measure-1", "measure-2", "measure-3", "measure-4"],
-    ["measure-5"],
-    ["measure-6", "measure-7", "measure-8"],
-  ]);
-  assert.deepEqual(rows.map((row) => row.startsSection), [true, false, true]);
+  const atoms = flattenChartMeasures(chart);
+
+  assert.deepEqual(atoms.map((atom) => atom.measureId), ["measure-1", "measure-2", "measure-3", "measure-4"]);
+  assert.deepEqual(atoms.map((atom) => atom.globalMeasureIndex), [1, 2, 3, 4]);
+  assert.notEqual(atoms[0].sectionKey, atoms[2].sectionKey);
+  assert.deepEqual(atoms.map((atom) => atom.startsSection), [true, false, true, false]);
 });
 
-test("composeChartRows aceita perfis de 2, 4 e 8 compassos por linha", () => {
-  const chart = song([8]);
-  assert.equal(composeChartRows(chart, { barsPerRow: 2 }).length, 4);
-  assert.equal(composeChartRows(chart, { barsPerRow: 4 }).length, 2);
-  assert.equal(composeChartRows(chart, { barsPerRow: 8 }).length, 1);
+test("composeChartSystems usa 16 células sem reiniciar na troca de seção", () => {
+  const atoms = flattenChartMeasures(song([6, 6]));
+  const systems = composeChartSystems(atoms, "normal");
+
+  assert.equal(systems.length, 3);
+  assert.deepEqual(systems.map((system) => system.cellsUsed), [16, 16, 16]);
+  assert.ok(systems.every((system) => system.cellsUsed <= 16));
+  assert.deepEqual(
+    systems[1].placements.map((placement) => [placement.atom.measureId, placement.atom.startsSection]),
+    [["measure-5", false], ["measure-6", false], ["measure-7", true], ["measure-8", false]]
+  );
 });
 
-test("paginateChart mantém título de seção no mesmo fragmento da primeira linha", () => {
-  const pages = paginateChart(song([4, 4]), { rowsPerPage: 1 });
+test("densidade compacta aceita até dois acordes curtos e recusa compassos densos ou rótulos longos", () => {
+  const eligible = song([4]);
+  eligible.sections[0].measures[0].chords = "Cmaj7 G7";
+  assert.equal(canUseCompactDensity(flattenChartMeasures(eligible)), true);
 
-  assert.equal(pages.length, 2);
-  assert.equal(pages[0].sections[0].label, "Seção 1");
-  assert.equal(pages[0].sections[0].rows[0].startsSection, true);
-  assert.equal(pages[1].sections[0].label, "Seção 2");
-  assert.equal(pages[1].sections[0].rows[0].startsSection, true);
+  const threeChords = structuredClone(eligible);
+  threeChords.sections[0].measures[0].chords = "Cmaj7 Dm7 G7";
+  assert.equal(canUseCompactDensity(flattenChartMeasures(threeChords)), false);
+
+  const longChord = structuredClone(eligible);
+  longChord.sections[0].measures[0].chords = "Cmaj7(add9add13)";
+  assert.equal(canUseCompactDensity(flattenChartMeasures(longChord)), false);
 });
 
-test("seções legadas sem id permanecem separadas", () => {
-  const chart = song([4, 4]);
-  delete chart.sections[0].id;
-  delete chart.sections[1].id;
+test("paginateChartSystems limita cada página a no máximo 12 sistemas", () => {
+  const atoms = flattenChartMeasures(song([52]));
+  const systems = composeChartSystems(atoms, "normal");
+  const pages = paginateChartSystems(systems, { systemCapacity: 99, maxSystemsPerPage: 99 });
 
-  const [page] = paginateChart(chart, { rowsPerPage: 8 });
-
-  assert.deepEqual(page.sections.map((section) => section.sectionId), ["section-1", "section-2"]);
+  assert.deepEqual(pages.map((page) => page.systemCount), [12, 1]);
+  assert.ok(pages.every((page) => page.systemCount <= 12));
 });
 
-test("paginateChart marca continuação quando uma seção atravessa a página", () => {
-  const pages = paginateChart(song([12]), { rowsPerPage: 2 });
+test("composeChartLayout mantém normal até 48 compassos e compacta 49 e 96 elegíveis", () => {
+  const normal = composeChartLayout(song([48]));
+  const compact49 = composeChartLayout(song([49]));
+  const compact96 = composeChartLayout(song([96]));
+  const compact97 = composeChartLayout(song([97]));
 
-  assert.equal(pages.length, 2);
-  assert.equal(pages[0].sections[0].continued, false);
-  assert.equal(pages[1].sections[0].continued, true);
-  assert.equal(pages[1].sections[0].label, "Seção 1");
+  assert.equal(normal.density, "normal");
+  assert.equal(normal.totalSystems, 12);
+  assert.equal(normal.pages.length, 1);
+  assert.equal(compact49.density, "compact");
+  assert.equal(compact49.totalSystems, 7);
+  assert.equal(compact49.pages.length, 1);
+  assert.equal(compact96.density, "compact");
+  assert.equal(compact96.totalSystems, 12);
+  assert.equal(compact96.pages.length, 1);
+  assert.equal(compact97.density, "compact");
+  assert.equal(compact97.totalSystems, 13);
+  assert.deepEqual(compact97.pages.map((page) => page.systemCount), [12, 1]);
 });
 
-test("paginateChart cria uma página vazia para cifra sem linhas", () => {
-  assert.deepEqual(paginateChart({ sections: [] }), [{ index: 1, rowCount: 0, layoutUnits: 0, sections: [] }]);
-  assert.equal(getChartPageCount(null), 1);
+test("composeChartLayout respeita capacidade menor, preferência explícita e fallback de legibilidade", () => {
+  const chart = song([40]);
+  const auto = composeChartLayout(chart, { systemCapacity: 6 });
+  const forcedNormal = composeChartLayout(chart, { systemCapacity: 6, density: "normal" });
+
+  assert.equal(auto.density, "compact");
+  assert.equal(auto.pages.length, 1);
+  assert.equal(forcedNormal.density, "normal");
+  assert.equal(forcedNormal.pages.length, 2);
+
+  chart.sections[0].measures[0].chords = "Cmaj7 Dm7 G7";
+  const ineligible = composeChartLayout(chart, { systemCapacity: 6, density: "compact" });
+  assert.equal(ineligible.compactEligible, false);
+  assert.equal(ineligible.density, "normal");
+  assert.equal(ineligible.pages.length, 2);
 });
 
-test("cifra curta e cifra no limite permanecem em uma página", () => {
-  assert.equal(getChartPageCount(song([28], 4), { rowsPerPage: 8 }), 1);
-  assert.equal(getChartPageCount(song([32], 4), { rowsPerPage: 8 }), 1);
-});
-
-test("títulos de seção consomem orçamento vertical", () => {
-  const pages = paginateChart(song([4, 4, 4, 4]), { rowsPerPage: 3 });
-
-  assert.deepEqual(pages.map((page) => page.layoutUnits), [5, 5]);
-  assert.deepEqual(pages.map((page) => page.rowCount), [2, 2]);
-});
-
-test("seção inteira vai para a próxima página quando o corte é evitável", () => {
-  const pages = paginateChart(song([8, 8], 4), { rowsPerPage: 3 });
-
-  assert.deepEqual(pages.map((page) => page.rowCount), [2, 2]);
-  assert.equal(pages[1].sections[0].continued, false);
-});
-
-test("paginação de 16 linhas produz duas páginas de 8", () => {
-  const chart = song([64], 4);
-  const pages = paginateChart(chart, { rowsPerPage: 8 });
-
-  assert.deepEqual(pages.map((page) => page.rowCount), [8, 8]);
-  assert.equal(getChartPageCount(chart, { rowsPerPage: 8 }), 2);
-});
-
-test("recompor as páginas preserva toda a sequência musical", () => {
-  const chart = song([5, 11, 4], 4);
-  const original = chart.sections.flatMap((section) => section.measures.map((measure) => measure.id));
-  const pages = paginateChart(chart, { rowsPerPage: 3 });
-
-  assert.deepEqual(measureIds(pages), original);
-});
-
-test("compositor não altera a música recebida", () => {
-  const chart = song([9], 4);
+test("layout adaptativo preserva integralmente a música e não altera a entrada", () => {
+  const chart = song([5, 11, 4]);
+  chart.sections[0].measures[0].repeat = "start";
+  chart.sections[1].measures[4].repeat = "both";
+  chart.sections[1].measures[4].ending = "1";
+  chart.sections[2].measures.at(-1).ending = "2";
   const before = structuredClone(chart);
+  const layout = composeChartLayout(chart, { systemCapacity: 3 });
+  const originalMeasures = before.sections.flatMap((section) => section.measures);
 
-  paginateChart(chart, { barsPerRow: 2, rowsPerPage: 2 });
-
+  assert.deepEqual(adaptiveMeasureIds(layout), chart.sections.flatMap((section) => section.measures.map((measure) => measure.id)));
+  assert.deepEqual(layout.atoms.map((atom) => atom.measure), originalMeasures);
   assert.deepEqual(chart, before);
 });
 
+test("grade musical mantém 16 células em qualquer densidade", () => {
+  const atoms = flattenChartMeasures(song([12]));
+  const normal = composeChartSystems(atoms, "normal");
+  const compact = composeChartSystems(atoms, "compact");
+
+  assert.ok(normal.every((system) => system.cellsUsed <= 16));
+  assert.ok(compact.every((system) => system.cellsUsed <= 16));
+  assert.ok(normal.flatMap((system) => system.placements).every((placement) => placement.cellSpan === 4));
+  assert.ok(compact.flatMap((system) => system.placements).every((placement) => placement.cellSpan === 2));
+});
+
 test("composePageSpread agrupa páginas em 1-up e 2-up", () => {
-  const pages = paginateChart(song([48], 4), { rowsPerPage: 4 });
+  const pages = composeChartLayout(song([48]), { systemCapacity: 4, density: "normal" }).pages;
 
   assert.deepEqual(composePageSpread(pages, 2, 1).visiblePages.map((page) => page.index), [2]);
   assert.deepEqual(composePageSpread(pages, 2, 2).visiblePages.map((page) => page.index), [1, 2]);
@@ -143,7 +162,7 @@ test("resolveReadingLayoutProfile usa largura útil de cada folha e mantém 1-up
 
   assert.equal(mobilePortrait.pageSpan, 1);
   assert.equal(mobileLandscape.pageSpan, 1);
-  assert.equal(mobileLandscape.rowsPerPage, 4);
+  assert.equal(mobileLandscape.systemCapacity, 4);
   assert.equal(tabletPortrait.pageSpan, 1);
 
   assert.equal(tabletLandscape.pageSpan, 2);
@@ -155,9 +174,8 @@ test("resolveReadingLayoutProfile usa largura útil de cada folha e mantém 1-up
   assert.equal(notebook1440.pageSpan, 2);
   assert.ok(notebook1440.usableSheetWidth >= notebook1440.minSheetWidth);
 
-  // Quando a barra é meia (8 compassos por linha), o piso de largura útil por folha sobe para 560px
-  const denseTablet = resolveReadingLayoutProfile({ viewportWidth: 1024, viewportHeight: 768, barsPerRow: 8 });
-  assert.equal(denseTablet.pageSpan, 1);
+  assert.ok(mobilePortrait.systemCapacity <= 12);
+  assert.ok(tabletPortrait.systemCapacity <= 12);
 });
 
 test("normalizeSpreadPage normaliza posição ao alternar entre 1-up e 2-up e permite última dupla incompleta", () => {

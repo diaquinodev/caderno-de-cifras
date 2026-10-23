@@ -1323,7 +1323,7 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     const makeMeasures = (prefix, count) =>
       Array.from({ length: count }, (_, idx) => ({
         id: `${prefix}-${idx + 1}`,
-        chords: idx === 0 ? `${prefix}1` : "C7M",
+        chords: idx === 0 ? `${prefix}1` : "C7M Dm7 G7",
         ending: "",
         repeat: "",
       }));
@@ -1450,7 +1450,7 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     const makeMeasures = (prefix, count) =>
       Array.from({ length: count }, (_, idx) => ({
         id: `${prefix}-${idx + 1}`,
-        chords: idx === 0 ? `${prefix}1` : "Dm7 G7",
+        chords: idx === 0 ? `${prefix}1` : "Dm7 G7 A7",
         ending: "",
         repeat: "",
       }));
@@ -1583,6 +1583,57 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     await expect(page.locator(".stage-bar")).toBeVisible();
     await expect(page.locator('[data-action="toggle-fullscreen"]')).toHaveAttribute("aria-pressed", "false");
 
+    expect(errors).toEqual([]);
+  });
+
+  test("fase 22: grade de 16 células mantém a marca quando uma seção começa no meio do sistema", async ({ page }) => {
+    const makeMeasures = (prefix, count) =>
+      Array.from({ length: count }, (_, idx) => ({
+        id: `${prefix}-${idx + 1}`,
+        chords: "C7M Dm7 G7",
+        ending: idx === count - 1 ? "2" : "",
+        repeat: idx === 0 ? "start" : "",
+      }));
+    const adaptiveLibrary = {
+      version: 2,
+      pdfDocuments: [],
+      songs: [{
+        id: "song-adaptive-grid",
+        title: "Grade Adaptativa",
+        composer: "Teste de Palco",
+        style: "Samba",
+        key: "C",
+        tempo: 120,
+        timeSignature: "4/4",
+        barsPerRow: 4,
+        sections: [
+          { id: "section-a", label: "Parte A", measures: makeMeasures("a", 6) },
+          { id: "section-b", label: "Parte B", measures: makeMeasures("b", 6) },
+        ],
+      }],
+      playlists: [],
+      setlists: [],
+    };
+
+    const errors = await setupPage(page, { library: adaptiveLibrary, seedPdf: false });
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await gotoRoute(page, "#/musicas/song-adaptive-grid");
+    await page.click('[data-action="toggle-clean"]');
+
+    const spread = page.locator("#chart-reading-spread");
+    const systems = page.locator("#paper-body .adaptive-system");
+    const sharedSystem = systems.nth(1);
+    await expect(spread).toHaveAttribute("data-density", "normal");
+    await expect(spread).toHaveAttribute("data-total-pages", "1");
+    await expect(systems).toHaveCount(3);
+    await expect(sharedSystem).toHaveAttribute("data-cells-used", "16");
+    await expect(sharedSystem.locator(".bar")).toHaveCount(4);
+    await expect(sharedSystem.locator('[data-measure-id="a-5"]')).toBeVisible();
+    await expect(sharedSystem.locator('[data-measure-id="a-6"]')).toBeVisible();
+    await expect(sharedSystem.locator('[data-measure-id="b-1"] .adaptive-section-marker')).toHaveText("Parte B");
+    await expect(sharedSystem.locator('[data-measure-id="b-2"]')).toBeVisible();
+    await expect(page.locator('[data-measure-id="a-1"]')).toHaveClass(/repeat-start/);
+    await expect(page.locator('[data-measure-id="b-6"]')).toHaveClass(/has-ending/);
     expect(errors).toEqual([]);
   });
 
