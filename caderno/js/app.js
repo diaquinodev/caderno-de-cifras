@@ -42,9 +42,8 @@ import { ALL_SIX_FIXTURES } from "./fixtures/cifras.js";
 import { analyzeSamples } from "./listen.js";
 import { inspectPdf, paintPdf, releasePdf } from "./pdfview.js";
 import {
+  composeChartLayout,
   composePageSpread,
-  getChartPageCount,
-  paginateChart,
   resolveReadingLayoutProfile,
 } from "./chart-pages.js";
 import {
@@ -1127,8 +1126,9 @@ function fitHeaderFields() {
  * @property {number} songIndex
  * @property {number} pageIndex
  * @property {import("./chart-pages.js").ReadingSpread} spread
- * @property {import("./chart-pages.js").ChartLayoutProfile & { usableSheetWidth: number, minSheetWidth: number }} profile
- * @property {import("./chart-pages.js").ChartPage[]} pages
+ * @property {import("./chart-pages.js").ReadingLayoutProfile} profile
+ * @property {import("./chart-pages.js").AdaptiveChartLayout} layout
+ * @property {import("./chart-pages.js").AdaptiveChartPage[]} pages
  */
 
 function isReadingChart(song) {
@@ -1136,15 +1136,13 @@ function isReadingChart(song) {
   return state.route.name === "stage" || Boolean(state.clean) || Boolean(state.fullscreen);
 }
 
-function resolveChartLayoutProfile(song) {
-  const barsPerRow = Number(song?.barsPerRow) || 4;
+function resolveChartLayoutProfile() {
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1024;
   const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 768;
-  const cleanOrFullscreen = Boolean(state.clean || state.fullscreen);
+  const cleanOrFullscreen = state.route.name === "stage" || Boolean(state.clean || state.fullscreen);
   return resolveReadingLayoutProfile({
     viewportWidth,
     viewportHeight,
-    barsPerRow,
     horizontalChrome: cleanOrFullscreen ? 16 : 36,
     verticalChrome: cleanOrFullscreen ? 84 : 136,
   });
@@ -1153,12 +1151,13 @@ function resolveChartLayoutProfile(song) {
 function getRuntimeChartPageCount(song) {
   if (!song) return 1;
   const sections = transposeSections(song.sections || [], song.key, state.previewKey);
-  return getChartPageCount({ ...song, sections }, resolveChartLayoutProfile(song));
+  const profile = resolveChartLayoutProfile();
+  return composeChartLayout({ ...song, sections }, { systemCapacity: profile.systemCapacity }).pages.length;
 }
 
 function getRuntimeChartPageSpan(song) {
   if (!song) return 1;
-  return resolveChartLayoutProfile(song).pageSpan || 1;
+  return resolveChartLayoutProfile().pageSpan || 1;
 }
 
 function performancePageOptions(song) {
@@ -1176,9 +1175,13 @@ function performancePageOptions(song) {
  * @returns {ChartReadingPosition}
  */
 function getChartReadingPosition(song) {
-  const profile = resolveChartLayoutProfile(song);
+  const profile = resolveChartLayoutProfile();
   const sections = song ? transposeSections(song.sections || [], song.key, state.previewKey) : [];
-  const pages = song ? paginateChart({ ...song, sections }, profile) : [];
+  const layout = composeChartLayout(
+    song ? { ...song, sections } : null,
+    { systemCapacity: profile.systemCapacity }
+  );
+  const pages = layout.pages;
   const spread = composePageSpread(pages, state.stagePage || 1, profile);
   const songIndex = state.route.name === "stage" ? Math.max(0, Number(state.stageIndex) || 0) : 0;
   return {
@@ -1186,6 +1189,7 @@ function getChartReadingPosition(song) {
     pageIndex: spread.firstPage,
     spread,
     profile,
+    layout,
     pages,
   };
 }
@@ -1289,37 +1293,28 @@ function chartReadingBar(song) {
   </div>`;
 }
 
-function renderReadingPageFragments(activePage, pages, totalPages, profile, hasTime, beats, unit) {
-  const pageIndex = activePage.index;
-  let bar = 1 + pages
-    .slice(0, pageIndex - 1)
-    .reduce((sum, p) => sum + p.sections.reduce((sSum, sec) => sSum + sec.rows.reduce((rSum, r) => rSum + r.measures.length, 0), 0), 0);
-  let firstLine = pageIndex === 1;
-  const lastFragment = activePage.sections[activePage.sections.length - 1];
-
-  return activePage.sections.map((fragment) => {
-    const named = fragment.label.trim().length > 1;
-    const shownLabel = fragment.continued && named ? `${fragment.label} (cont.)` : fragment.label;
-    const letter = `<div class="rehearsal static">${esc(shownLabel)}</div>`;
-    const lines = fragment.rows.map((row, rowIndex) => {
-      const showTime = firstLine && hasTime;
-      firstLine = false;
-      const isLastLineOfSong =
-        pageIndex === totalPages &&
-        fragment === lastFragment &&
-        rowIndex === fragment.rows.length - 1;
-      const cells = row.measures.map((measure, index) => {
-        const last = index === row.measures.length - 1;
-        const fullRow = row.measures.length === profile.barsPerRow;
-        return measureCell(measure, bar++, false, isLastLineOfSong && last, last && fullRow && !(isLastLineOfSong && last));
-      }).join("");
-      return `<div class="staff-line" style="--bars:${profile.barsPerRow}">
-        ${rowIndex === 0 && !named ? letter : ""}
-        ${showTime ? `<div class="time-sig" aria-hidden="true"><span>${esc(beats)}</span><span>${esc(unit)}</span></div>` : ""}
-        ${cells}
-      </div>`;
+function renderAdaptiveReadingPage(activePage, layout, hasTime, beats, unit) {
+  return activePage.systems.map((system) => {
+    const sectionStarts = system.placements.filter((placement) => placement.atom.startsSection);
+    const hasSectionMarker = sectionStarts.some((placement) => placement.atom.sectionLabel.trim());
+    const showTime = hasTime && system.placements.some((placement) => placement.atom.globalMeasureIndex === 1);
+    const cells = system.placements.map((placement, placementIndex) => {
+      const { atom, cellSpan } = placement;
+      const isLastPlacement = placementIndex === system.placements.length - 1;
+      const isFinal = atom.globalMeasureIndex === layout.atoms.length;
+      const isRowEnd = isLastPlacement && system.cellsUsed === layout.cellsPerSystem && !isFinal;
+      const sectionMarker = atom.startsSection && atom.sectionLabel.trim()
+        ? `<div class="adaptive-section-marker" data-section-key="${esc(atom.sectionKey)}">${esc(atom.sectionLabel)}</div>`
+        : "";
+      return measureCell(atom.measure, atom.globalMeasureIndex, false, isFinal, isRowEnd, {
+        cellSpan,
+        sectionMarker,
+      });
     }).join("");
-    return `<div class="system${named ? " named" : ""}" data-section-id="${esc(fragment.sectionId)}" data-continued="${fragment.continued ? "true" : "false"}">${named ? `<div class="section-head">${letter}</div>` : ""}${lines}</div>`;
+    return `<div class="staff-line adaptive-system${hasSectionMarker ? " has-section-marker" : ""}" data-system-index="${system.index}" data-cells-used="${system.cellsUsed}">
+      ${showTime ? `<div class="time-sig" aria-hidden="true"><span>${esc(beats)}</span><span>${esc(unit)}</span></div>` : ""}
+      ${cells}
+    </div>`;
   }).join("");
 }
 
@@ -1335,7 +1330,7 @@ function paintPaper(focusId) {
   if (reading) {
     const spreadHost = /** @type {HTMLElement | null} */ (document.querySelector("#chart-reading-spread"));
     if (!spreadHost) return;
-    const { pageIndex, spread, profile, pages } = getChartReadingPosition(song);
+    const { pageIndex, spread, profile, layout, pages } = getChartReadingPosition(song);
     const totalPages = pages.length;
     state.stagePage = pageIndex;
 
@@ -1350,6 +1345,8 @@ function paintPaper(focusId) {
     spreadHost.dataset.totalPages = String(totalPages);
     spreadHost.dataset.visiblePages = spread.visiblePages.map((p) => p.index).join(",");
     spreadHost.dataset.minSheetWidth = String(profile.minSheetWidth || 420);
+    spreadHost.dataset.density = layout.density;
+    spreadHost.dataset.systemCapacity = String(layout.systemCapacity);
     spreadHost.style.setProperty("--sheet-target-width", `${profile.usableSheetWidth}px`);
 
     spreadHost.innerHTML = spread.visiblePages.map((activePage, spreadIdx) => {
@@ -1358,7 +1355,7 @@ function paintPaper(focusId) {
         : (spreadIdx === 0 ? "clean-paper" : `clean-paper-${spreadIdx + 1}`);
       const bodyId = spreadIdx === 0 ? "paper-body" : `paper-body-${spreadIdx + 1}`;
       const isLastVisibleSheet = spreadIdx === spread.visiblePages.length - 1;
-      const bodyHtml = renderReadingPageFragments(activePage, pages, totalPages, profile, hasTime, beats, unit);
+      const bodyHtml = renderAdaptiveReadingPage(activePage, layout, hasTime, beats, unit);
       return `<article class="paper sheet" id="${sheetId}" data-page="${activePage.index}" data-total-pages="${totalPages}">
         <div class="lead">
           <h1 class="sheet-title">${esc(song.title)}</h1>
@@ -1429,8 +1426,11 @@ function paintPaper(focusId) {
   }
 }
 
-function measureCell(measure, number, editable, isFinal, isRowEnd) {
+function measureCell(measure, number, editable, isFinal, isRowEnd, options = {}) {
   const classes = ["bar"];
+  const cellSpan = Number(options.cellSpan);
+  const adaptive = Number.isFinite(cellSpan) && cellSpan > 0;
+  if (adaptive) classes.push("adaptive-bar");
   if (measure.repeat === "start" || measure.repeat === "both") classes.push("repeat-start");
   if (measure.repeat === "end" || measure.repeat === "both") classes.push("repeat-end");
   if (measure.ending) classes.push("has-ending");
@@ -1450,7 +1450,9 @@ function measureCell(measure, number, editable, isFinal, isRowEnd) {
   const field = editable
     ? `<input class="chord-input" data-chord-id="${esc(measure.id)}" value="${esc(shown)}" aria-label="Compasso ${number}" autocomplete="off" spellcheck="false">`
     : "";
-  return `<div class="${classes.join(" ")}" data-measure-id="${esc(measure.id)}">${endingHtml}${dots}<div class="glyphs" aria-hidden="true">${glyphRow(shown)}</div>${field}${tools}</div>`;
+  const style = adaptive ? ` style="--cell-span:${cellSpan}"` : "";
+  const sectionMarker = typeof options.sectionMarker === "string" ? options.sectionMarker : "";
+  return `<div class="${classes.join(" ")}" data-measure-id="${esc(measure.id)}"${style}>${sectionMarker}${endingHtml}${dots}<div class="glyphs" aria-hidden="true">${glyphRow(shown)}</div>${field}${tools}</div>`;
 }
 
 function viewPlaylists() {

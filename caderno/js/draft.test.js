@@ -31,7 +31,7 @@ import {
 } from "./draft.js";
 import { parseCifraSource } from "./source.js";
 import { ALL_SIX_FIXTURES, longRepeatedChart } from "./fixtures/cifras.js";
-import { getChartPageCount } from "./chart-pages.js";
+import { composeChartLayout } from "./chart-pages.js";
 
 test("suggestChart: timeSignature vazio por padrão gera aviso NO_TIME_SIGNATURE", () => {
   const source = parseCifraSource(`Tom: C
@@ -704,7 +704,7 @@ test("fase 21 (longRepeatedChart): expansão da cifra compactada equivale à seq
   const compactedMeasures = compactedSong.sections.reduce((acc, s) => acc + s.measures.length, 0);
   assert.ok(compactedMeasures < uncompactedMeasures, "Compactação deve reduzir compassos escritos");
 
-  const uncompactedPages = getChartPageCount(uncompactedSong, { maxUnitsPerPage: 10 });
-  const compactedPages = getChartPageCount(compactedSong, { maxUnitsPerPage: 10 });
+  const uncompactedPages = composeChartLayout(uncompactedSong, { systemCapacity: 5, density: "normal" }).pages.length;
+  const compactedPages = composeChartLayout(compactedSong, { systemCapacity: 5, density: "normal" }).pages.length;
   assert.ok(compactedPages < uncompactedPages, "Compactação deve aumentar a densidade por página");
 });

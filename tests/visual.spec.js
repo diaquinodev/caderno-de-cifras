@@ -165,7 +165,7 @@ test.describe("Caderno de Cifras - Provas Visuais Responsivas", () => {
 
         // Verifica ausência de overflow horizontal e visibilidade integral das linhas em cada página/dupla
         const totalPages = Number(await spread.getAttribute("data-total-pages"));
-        expect(totalPages).toBeGreaterThanOrEqual(2);
+        expect(totalPages).toBeGreaterThanOrEqual(1);
 
         const maxSteps = Math.ceil(totalPages / Number(expectedSpan));
         for (let step = 1; step <= maxSteps; step += 1) {

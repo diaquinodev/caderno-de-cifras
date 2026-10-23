@@ -1,155 +1,247 @@
 /**
- * @typedef {Object} ChartRow
+ * @typedef {Object} ChartMeasureAtom
+ * @property {any} measure
+ * @property {string} measureId
+ * @property {number} globalMeasureIndex
+ * @property {string} sectionKey
  * @property {string} sectionId
  * @property {string} sectionLabel
- * @property {number} rowIndex
  * @property {boolean} startsSection
- * @property {number} measureStart
- * @property {any[]} measures
  */
 
 /**
- * @typedef {Object} ChartPageSection
- * @property {string} sectionId
- * @property {string} label
- * @property {boolean} continued
- * @property {ChartRow[]} rows
+ * @typedef {Object} MeasurePlacement
+ * @property {ChartMeasureAtom} atom
+ * @property {number} cellStart
+ * @property {number} cellSpan
  */
 
 /**
- * @typedef {Object} ChartLayoutProfile
- * @property {number} [barsPerRow]
- * @property {number} [rowsPerPage]
- * @property {number} [pageSpan]
- * @property {number} [rowUnits]
- * @property {number} [sectionHeaderUnits]
- * @property {number} [pageUnits]
- */
-
-/**
- * @typedef {Object} ChartPage
+ * @typedef {Object} ChartSystem
  * @property {number} index
- * @property {number} rowCount
- * @property {number} layoutUnits
- * @property {ChartPageSection[]} sections
+ * @property {number} cellsUsed
+ * @property {MeasurePlacement[]} placements
+ */
+
+/**
+ * @typedef {Object} AdaptiveChartPage
+ * @property {number} index
+ * @property {number} systemCount
+ * @property {ChartSystem[]} systems
+ */
+
+/**
+ * @typedef {Object} AdaptiveChartLayout
+ * @property {"normal" | "compact"} density
+ * @property {boolean} compactEligible
+ * @property {16} cellsPerSystem
+ * @property {number} systemCapacity
+ * @property {number} totalSystems
+ * @property {ChartMeasureAtom[]} atoms
+ * @property {ChartSystem[]} systems
+ * @property {AdaptiveChartPage[]} pages
+ */
+
+/**
+ * @typedef {Object} ReadingLayoutProfile
+ * @property {number} systemCapacity
+ * @property {number} [pageSpan]
+ * @property {number} minSheetWidth
+ * @property {number} usableSheetWidth
  */
 
 /**
  * @typedef {Object} ReadingSpread
  * @property {number} firstPage
  * @property {number} pageSpan
- * @property {ChartPage[]} visiblePages
+ * @property {AdaptiveChartPage[]} visiblePages
  */
 
-export const DEFAULT_BARS_PER_ROW = 4;
-export const DEFAULT_ROWS_PER_PAGE = 8;
-export const DEFAULT_SECTION_HEADER_UNITS = 1;
 export const DEFAULT_MIN_SHEET_WIDTH = 420;
 export const DEFAULT_SPREAD_GAP = 16;
 export const DEFAULT_HORIZONTAL_CHROME = 36;
 export const DEFAULT_VERTICAL_CHROME = 136;
+export const DEFAULT_CELLS_PER_SYSTEM = 16;
+export const DEFAULT_MAX_SYSTEMS_PER_PAGE = 12;
+export const DEFAULT_SYSTEMS_PER_PAGE = 8;
+export const NORMAL_MEASURE_CELL_SPAN = 4;
+export const COMPACT_MEASURE_CELL_SPAN = 2;
+export const DEFAULT_COMPACT_CHORD_TEXT_LIMIT = 16;
+export const DEFAULT_COMPACT_CHORD_TOKEN_LIMIT = 10;
 
 /**
- * Converte as seções da música em linhas musicais indivisíveis.
- * A função preserva a ordem e não altera a música recebida.
+ * Achata a música em uma sequência canônica de compassos. A chave da seção
+ * inclui sua posição para que IDs legados repetidos nunca fundam duas seções.
  *
  * @param {any} song
- * @param {Object} [profile]
- * @param {number} [profile.barsPerRow]
- * @returns {ChartRow[]}
+ * @returns {ChartMeasureAtom[]}
  */
-export function composeChartRows(song, { barsPerRow } = {}) {
-  const columns = positiveInteger(barsPerRow, positiveInteger(song?.barsPerRow, 4));
+export function flattenChartMeasures(song) {
   const sections = Array.isArray(song?.sections) ? song.sections : [];
-  const rows = [];
+  const atoms = [];
+  let globalMeasureIndex = 0;
 
   for (const [sectionIndex, section] of sections.entries()) {
     const measures = Array.isArray(section?.measures) ? section.measures : [];
-    for (let start = 0, rowIndex = 0; start < measures.length; start += columns, rowIndex += 1) {
-      rows.push({
-        sectionId: String(section?.id || `section-${sectionIndex + 1}`),
-        sectionLabel: String(section?.label || ""),
-        rowIndex,
-        startsSection: rowIndex === 0,
-        measureStart: start,
-        measures: measures.slice(start, start + columns),
+    const sectionId = String(section?.id || `section-${sectionIndex + 1}`);
+    const sectionKey = `${sectionIndex + 1}:${sectionId}`;
+    const sectionLabel = String(section?.label || "");
+
+    for (const [measureIndex, measure] of measures.entries()) {
+      globalMeasureIndex += 1;
+      atoms.push({
+        measure,
+        measureId: String(measure?.id || `measure-${globalMeasureIndex}`),
+        globalMeasureIndex,
+        sectionKey,
+        sectionId,
+        sectionLabel,
+        startsSection: measureIndex === 0,
       });
     }
   }
 
-  return rows;
+  return atoms;
 }
 
 /**
- * Compõe páginas sem cortar uma linha musical. Se uma seção atravessa uma
- * página, o fragmento seguinte é marcado como continuação.
+ * Restringe a densidade compacta a compassos com no máximo dois acordes e
+ * rótulos curtos o bastante para a futura célula visual. Não altera a fonte.
  *
- * @param {any} song
- * @param {Object} [profile]
- * @param {number} [profile.barsPerRow]
- * @param {number} [profile.rowsPerPage]
- * @param {number} [profile.rowUnits]
- * @param {number} [profile.sectionHeaderUnits]
- * @param {number} [profile.pageUnits]
- * @returns {ChartPage[]}
+ * @param {ChartMeasureAtom[]} atoms
+ * @param {Object} [options]
+ * @param {number} [options.chordTextLimit]
+ * @param {number} [options.chordTokenLimit]
+ * @returns {boolean}
  */
-export function paginateChart(song, {
-  barsPerRow,
-  rowsPerPage,
-  rowUnits,
-  sectionHeaderUnits,
-  pageUnits,
-} = {}) {
-  const rows = composeChartRows(song, { barsPerRow });
-  const rowCost = positiveInteger(rowUnits, 2);
-  const headerCost = nonNegativeInteger(sectionHeaderUnits, 1);
-  const capacity = positiveInteger(pageUnits, positiveInteger(rowsPerPage, 8) * rowCost);
-  if (rows.length === 0) return [{ index: 1, rowCount: 0, layoutUnits: 0, sections: [] }];
+export function canUseCompactDensity(atoms, options = {}) {
+  if (!Array.isArray(atoms) || atoms.length === 0) return false;
+  const textLimit = positiveInteger(options.chordTextLimit, DEFAULT_COMPACT_CHORD_TEXT_LIMIT);
+  const tokenLimit = positiveInteger(options.chordTokenLimit, DEFAULT_COMPACT_CHORD_TOKEN_LIMIT);
 
-  const pages = [];
-  let pageRows = [];
-  let usedUnits = 0;
+  return atoms.every((atom) => {
+    const chordText = String(atom?.measure?.chords || "").trim();
+    const chordTokens = chordText ? chordText.split(/\s+/).filter(Boolean) : [];
+    return chordTokens.length <= 2 &&
+      chordText.length <= textLimit &&
+      chordTokens.every((token) => token.length <= tokenLimit);
+  });
+}
 
-  const flushPage = () => {
-    if (pageRows.length === 0) return;
-    pages.push(createPage(pages.length + 1, pageRows, usedUnits));
-    pageRows = [];
-    usedUnits = 0;
+/**
+ * Empacota compassos sequenciais em sistemas de células sem cortar compassos
+ * nem reiniciar a linha quando começa uma nova seção.
+ *
+ * @param {ChartMeasureAtom[]} atoms
+ * @param {"normal" | "compact"} [density]
+ * @returns {ChartSystem[]}
+ */
+export function composeChartSystems(atoms, density = "normal") {
+  const cellSpan = density === "compact" ? COMPACT_MEASURE_CELL_SPAN : NORMAL_MEASURE_CELL_SPAN;
+  const safeAtoms = Array.isArray(atoms) ? atoms : [];
+  const systems = [];
+  let placements = [];
+  let cellsUsed = 0;
+
+  const flushSystem = () => {
+    if (placements.length === 0) return;
+    systems.push({ index: systems.length + 1, cellsUsed, placements });
+    placements = [];
+    cellsUsed = 0;
   };
 
-  for (const sectionRows of groupRowsBySection(rows)) {
-    const namedHeaderCost = sectionRows[0].sectionLabel.trim().length > 1 ? headerCost : 0;
-    const freshSectionCost = sectionRows.length * rowCost;
-    const inlineSectionCost = namedHeaderCost + freshSectionCost;
-
-    if (pageRows.length > 0 && freshSectionCost <= capacity && usedUnits + inlineSectionCost > capacity) {
-      flushPage();
-    }
-
-    for (const row of sectionRows) {
-      const startsAdditionalSection = pageRows.length > 0 && pageRows.at(-1)?.sectionId !== row.sectionId;
-      let nextCost = rowCost + (startsAdditionalSection ? namedHeaderCost : 0);
-      if (pageRows.length > 0 && usedUnits + nextCost > capacity) {
-        flushPage();
-        nextCost = rowCost;
-      }
-      pageRows.push(row);
-      usedUnits += nextCost;
-    }
+  for (const atom of safeAtoms) {
+    if (placements.length > 0 && cellsUsed + cellSpan > DEFAULT_CELLS_PER_SYSTEM) flushSystem();
+    placements.push({ atom, cellStart: cellsUsed, cellSpan });
+    cellsUsed += cellSpan;
   }
-  flushPage();
+  flushSystem();
+
+  return systems;
+}
+
+/**
+ * Divide sistemas inteiros em páginas. A capacidade nunca ultrapassa os 12
+ * sistemas observáveis no modelo de referência.
+ *
+ * @param {ChartSystem[]} systems
+ * @param {Object} [profile]
+ * @param {number} [profile.systemCapacity]
+ * @param {number} [profile.maxSystemsPerPage]
+ * @returns {AdaptiveChartPage[]}
+ */
+export function paginateChartSystems(systems, profile = {}) {
+  const maxSystems = Math.min(
+    DEFAULT_MAX_SYSTEMS_PER_PAGE,
+    positiveInteger(profile.maxSystemsPerPage, DEFAULT_MAX_SYSTEMS_PER_PAGE)
+  );
+  const systemCapacity = Math.min(maxSystems, positiveInteger(profile.systemCapacity, maxSystems));
+  const safeSystems = Array.isArray(systems) ? systems : [];
+  if (safeSystems.length === 0) return [{ index: 1, systemCount: 0, systems: [] }];
+
+  const pages = [];
+  for (let start = 0; start < safeSystems.length; start += systemCapacity) {
+    const pageSystems = safeSystems.slice(start, start + systemCapacity);
+    pages.push({ index: pages.length + 1, systemCount: pageSystems.length, systems: pageSystems });
+  }
   return pages;
 }
 
 /**
+ * Compõe os candidatos normal e compacto e escolhe a densidade que reduz o
+ * número de páginas. O modo normal vence empates para preservar conforto.
+ *
  * @param {any} song
  * @param {Object} [profile]
- * @param {number} [profile.barsPerRow]
- * @param {number} [profile.rowsPerPage]
- * @returns {number}
+ * @param {number} [profile.systemCapacity]
+ * @param {number} [profile.maxSystemsPerPage]
+ * @param {"auto" | "normal" | "compact"} [profile.density]
+ * @param {number} [profile.compactChordTextLimit]
+ * @param {number} [profile.compactChordTokenLimit]
+ * @returns {AdaptiveChartLayout}
  */
-export function getChartPageCount(song, profile = {}) {
-  return paginateChart(song, profile).length;
+export function composeChartLayout(song, profile = {}) {
+  const maxSystemsPerPage = Math.min(
+    DEFAULT_MAX_SYSTEMS_PER_PAGE,
+    positiveInteger(profile.maxSystemsPerPage, DEFAULT_MAX_SYSTEMS_PER_PAGE)
+  );
+  const systemCapacity = Math.min(
+    maxSystemsPerPage,
+    positiveInteger(profile.systemCapacity, maxSystemsPerPage)
+  );
+  const atoms = flattenChartMeasures(song);
+  const compactEligible = canUseCompactDensity(atoms, {
+    chordTextLimit: profile.compactChordTextLimit,
+    chordTokenLimit: profile.compactChordTokenLimit,
+  });
+  const normalSystems = composeChartSystems(atoms, "normal");
+  const normalPages = paginateChartSystems(normalSystems, { systemCapacity, maxSystemsPerPage });
+  const requestedDensity = ["normal", "compact"].includes(profile.density) ? profile.density : "auto";
+
+  let density = "normal";
+  let systems = normalSystems;
+  let pages = normalPages;
+
+  if (compactEligible && requestedDensity !== "normal") {
+    const compactSystems = composeChartSystems(atoms, "compact");
+    const compactPages = paginateChartSystems(compactSystems, { systemCapacity, maxSystemsPerPage });
+    if (requestedDensity === "compact" || compactPages.length < normalPages.length) {
+      density = "compact";
+      systems = compactSystems;
+      pages = compactPages;
+    }
+  }
+
+  return {
+    density,
+    compactEligible,
+    cellsPerSystem: DEFAULT_CELLS_PER_SYSTEM,
+    systemCapacity,
+    totalSystems: systems.length,
+    atoms,
+    systems,
+    pages,
+  };
 }
 
 /**
@@ -160,25 +252,21 @@ export function getChartPageCount(song, profile = {}) {
  * @param {Object} [options]
  * @param {number} [options.viewportWidth]
  * @param {number} [options.viewportHeight]
- * @param {number} [options.barsPerRow]
  * @param {number} [options.minSheetWidth]
  * @param {number} [options.spreadGap]
  * @param {number} [options.horizontalChrome]
  * @param {number} [options.verticalChrome]
- * @returns {ChartLayoutProfile & { usableSheetWidth: number, minSheetWidth: number }}
+ * @returns {ReadingLayoutProfile}
  */
 export function resolveReadingLayoutProfile(options = {}) {
   const viewportWidth = positiveInteger(options.viewportWidth, 1024);
   const viewportHeight = positiveInteger(options.viewportHeight, 768);
-  const barsPerRow = positiveInteger(options.barsPerRow, DEFAULT_BARS_PER_ROW);
-  const baseMinWidth = positiveInteger(options.minSheetWidth, DEFAULT_MIN_SHEET_WIDTH);
-  const minSheetWidth = barsPerRow >= 8 ? Math.max(baseMinWidth, 560) : baseMinWidth;
+  const minSheetWidth = positiveInteger(options.minSheetWidth, DEFAULT_MIN_SHEET_WIDTH);
   const spreadGap = nonNegativeInteger(options.spreadGap, DEFAULT_SPREAD_GAP);
   const horizontalChrome = nonNegativeInteger(options.horizontalChrome, DEFAULT_HORIZONTAL_CHROME);
   const verticalChrome = nonNegativeInteger(options.verticalChrome, DEFAULT_VERTICAL_CHROME);
 
   const isLandscape = viewportWidth > viewportHeight;
-  const rowsPerPage = viewportHeight < 500 ? 4 : DEFAULT_ROWS_PER_PAGE;
   const widthPerDualSheet = Math.floor((viewportWidth - horizontalChrome - spreadGap) / 2);
   const heightBoundedWidth = Math.floor(Math.max(320, (viewportHeight - verticalChrome) * 0.68));
   const dualSheetWidth = Math.min(widthPerDualSheet, heightBoundedWidth);
@@ -190,13 +278,14 @@ export function resolveReadingLayoutProfile(options = {}) {
     960
   );
 
+  const usableSheetWidth = pageSpan === 2 ? dualSheetWidth : singleSheetWidth;
+  const systemCapacity = viewportHeight < 500 ? 4 : DEFAULT_SYSTEMS_PER_PAGE;
+
   return {
-    barsPerRow,
-    rowsPerPage,
-    sectionHeaderUnits: DEFAULT_SECTION_HEADER_UNITS,
+    systemCapacity,
     pageSpan,
     minSheetWidth,
-    usableSheetWidth: pageSpan === 2 ? dualSheetWidth : singleSheetWidth,
+    usableSheetWidth,
   };
 }
 
@@ -205,7 +294,7 @@ export function resolveReadingLayoutProfile(options = {}) {
  *
  * @param {number} [activePage]
  * @param {number} [totalPages]
- * @param {number | ChartLayoutProfile} [spanOrProfile]
+ * @param {number | ReadingLayoutProfile} [spanOrProfile]
  * @returns {number}
  */
 export function normalizeSpreadPage(activePage = 1, totalPages = 1, spanOrProfile = 1) {
@@ -221,9 +310,9 @@ export function normalizeSpreadPage(activePage = 1, totalPages = 1, spanOrProfil
 /**
  * Agrupa páginas já compostas em uma folha simples ou dupla.
  *
- * @param {ChartPage[]} pages
+ * @param {AdaptiveChartPage[]} pages
  * @param {number} [activePage]
- * @param {number | ChartLayoutProfile} [spanOrProfile]
+ * @param {number | ReadingLayoutProfile} [spanOrProfile]
  * @returns {ReadingSpread}
  */
 export function composePageSpread(pages, activePage = 1, spanOrProfile = 1) {
@@ -238,47 +327,6 @@ export function composePageSpread(pages, activePage = 1, spanOrProfile = 1) {
     pageSpan: span,
     visiblePages: safePages.slice(firstPage - 1, firstPage - 1 + span),
   };
-}
-
-function createPage(index, rows, layoutUnits) {
-  return {
-    index,
-    rowCount: rows.length,
-    layoutUnits,
-    sections: groupPageSections(rows),
-  };
-}
-
-function groupRowsBySection(rows) {
-  const groups = [];
-  for (const row of rows) {
-    const current = groups.at(-1);
-    if (!current || current[0].sectionId !== row.sectionId) groups.push([row]);
-    else current.push(row);
-  }
-  return groups;
-}
-
-/**
- * @param {ChartRow[]} rows
- * @returns {ChartPageSection[]}
- */
-function groupPageSections(rows) {
-  const fragments = [];
-  for (const row of rows) {
-    const current = fragments.at(-1);
-    if (!current || current.sectionId !== row.sectionId) {
-      fragments.push({
-        sectionId: row.sectionId,
-        label: row.sectionLabel,
-        continued: !row.startsSection,
-        rows: [row],
-      });
-    } else {
-      current.rows.push(row);
-    }
-  }
-  return fragments;
 }
 
 function positiveInteger(value, fallback) {
