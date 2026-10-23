@@ -34,6 +34,7 @@ import { parseCifraSource, verifyCifraSourceInvariants } from "./source.js";
 import { ALL_SIX_FIXTURES } from "./fixtures/cifras.js";
 import { analyzeSamples } from "./listen.js";
 import { inspectPdf, paintPdf, releasePdf } from "./pdfview.js";
+import { getChartPageCount, paginateChart } from "./chart-pages.js";
 import {
   blankMeasure,
   blankPlaylist,
@@ -348,16 +349,12 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (event.target.matches?.("input, textarea, select")) return;
-  const readingPdf = state.clean && currentSong()?.pdfName && state.route.name === "song";
-  const stagePdf = state.route.name === "stage" && currentSong()?.pdfName && !state.stageChart;
-  if ((readingPdf || stagePdf) && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
+  const inPerformanceReading = state.route.name === "stage" || (state.route.name === "song" && state.clean);
+  if (inPerformanceReading && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
     event.preventDefault();
     stepPerformance(event.key === "ArrowRight" ? 1 : -1);
     return;
   }
-  if (!document.body.classList.contains("stage")) return;
-  if (event.key === "ArrowRight") actions["stage-next"]();
-  if (event.key === "ArrowLeft") actions["stage-prev"]();
 });
 
 document.addEventListener("focusin", (event) => {
@@ -384,6 +381,11 @@ window.addEventListener("resize", () => {
   resizeDebounce = setTimeout(() => {
     if (document.querySelector(".pdf-canvas")) {
       mountPdfFrame();
+      return;
+    }
+    const song = currentSong();
+    if (isReadingChart(song)) {
+      renderMain();
     }
   }, 100);
 });
@@ -787,21 +789,15 @@ const actions = {
     const song = currentSong();
     if (state.route.name === "stage" && song?.pdfName) {
       state.stageChart = !state.stageChart;
+      state.stagePage = 1;
       renderAll();
       return;
     }
     state.clean = !state.clean;
-    if (song?.pdfName) {
-      if (state.clean) state.stagePage = state.stagePage || 1;
-      renderAll();
-      return;
+    if (state.route.name === "song") {
+      state.stagePage = 1;
     }
-    document.body.classList.toggle("clean", state.clean);
-    const button = document.querySelector("[data-action='toggle-clean']");
-    if (button) button.textContent = readLabel(song);
-    const paper = document.querySelector(".paper.sheet");
-    if (paper && !state.clean) paper.style.zoom = "";
-    requestAnimationFrame(fitPerformanceSheet);
+    renderAll();
   },
   "read-pdf": () => {
     state.clean = true;
@@ -1016,7 +1012,19 @@ function viewSong() {
         <button class="btn ghost" type="button" data-action="clear-preview">Voltar</button>
       </span>
     </div>
-    ${showingPdf(song) ? pdfStage(song, state.stagePage) : `<article class="paper sheet">
+    ${showingPdf(song) ? pdfStage(song, state.stagePage) : isReadingChart(song) ? `${tapLayer()}<div class="reading-viewport" id="chart-reading-viewport">
+      <article class="paper sheet" id="clean-paper">
+        <div class="lead">
+          <h1 class="sheet-title">${esc(song.title)}</h1>
+          <div class="sheet-sub">
+            <p class="sheet-style">${song.style ? `(${esc(song.style)})` : ""}</p>
+            <p class="sheet-composer">${esc(song.composer)}</p>
+          </div>
+          <div id="paper-body"></div>
+        </div>
+      </article>
+      ${chartReadingBar(song)}
+    </div>` : `<article class="paper sheet">
       <div class="lead">
       <input class="sheet-title" data-field="title" value="${esc(song.title)}" aria-label="Título" autocomplete="off" spellcheck="false">
       <div class="sheet-sub">
@@ -1084,14 +1092,130 @@ function fitHeaderFields() {
   probe.remove();
 }
 
+/**
+ * @typedef {Object} ChartReadingPosition
+ * @property {number} songIndex
+ * @property {number} pageIndex
+ */
+
+function isReadingChart(song) {
+  if (!song || showingPdf(song)) return false;
+  return state.route.name === "stage" || Boolean(state.clean);
+}
+
+function resolveChartLayoutProfile(song) {
+  const barsPerRow = Number(song?.barsPerRow) || 4;
+  const rowsPerPage = typeof window !== "undefined" && window.innerHeight < 500 ? 4 : 8;
+  return {
+    barsPerRow,
+    rowsPerPage,
+    pageSpan: 1,
+  };
+}
+
+function getRuntimeChartPageCount(song) {
+  if (!song) return 1;
+  const sections = transposeSections(song.sections || [], song.key, state.previewKey);
+  return getChartPageCount({ ...song, sections }, resolveChartLayoutProfile(song));
+}
+
+function performancePageOptions(song) {
+  const hasPdf = Boolean(song?.pdfRef || song?.pdfName || Number(song?.pdfPages) > 1);
+  const forceChart = Boolean(song && !showingPdf(song) && hasPdf);
+  return {
+    representation: forceChart ? "chart" : "auto",
+    chartPageCount: getRuntimeChartPageCount,
+  };
+}
+
+/**
+ * @param {any} song
+ * @returns {ChartReadingPosition}
+ */
+function getChartReadingPosition(song) {
+  const pages = getSongPageCount(song, performancePageOptions(song));
+  const pageIndex = Math.min(Math.max(1, Number(state.stagePage) || 1), pages);
+  const songIndex = state.route.name === "stage" ? Math.max(0, Number(state.stageIndex) || 0) : 0;
+  return { songIndex, pageIndex };
+}
+
+function chartReadingBar(song) {
+  const onStage = state.route.name === "stage";
+  const setlist = onStage ? currentSetlist() : null;
+  const items = setlist?.items || (song ? [{ songId: song.id }] : []);
+  const pageOptions = performancePageOptions(song);
+  const pages = getSongPageCount(song, pageOptions);
+  const { songIndex, pageIndex } = getChartReadingPosition(song);
+  const currentPos = { itemIndex: songIndex, page: pageIndex };
+  const canPrev = canStepPerformance(currentPos, -1, { items, library: state.library, ...pageOptions });
+  const canNext = canStepPerformance(currentPos, 1, { items, library: state.library, ...pageOptions });
+  return `<div class="chart-reading-bar no-print" role="region" aria-label="Navegação de páginas da cifra">
+    <button class="btn ghost" type="button" data-action="toggle-clean">${readLabel(song)}</button>
+    <button class="btn ghost" type="button" data-action="stage-step" data-dir="-1" aria-label="Página anterior" ${canPrev ? "" : "disabled"}>Anterior</button>
+    <p class="chart-page-caption" id="chart-page-indicator" aria-live="polite">${esc(song.title)} · Página ${pageIndex} de ${pages}</p>
+    <button class="btn ghost" type="button" data-action="stage-step" data-dir="1" aria-label="Próxima página" ${canNext ? "" : "disabled"}>Próxima</button>
+  </div>`;
+}
+
 function paintPaper(focusId) {
   const song = currentSong();
   const paper = document.querySelector("#paper-body");
   if (!song || !paper) return;
-  const editable = state.route.name === "song" && !state.previewKey;
+  const reading = isReadingChart(song);
+  const editable = state.route.name === "song" && !state.clean && !state.previewKey;
   const sections = editable ? song.sections : transposeSections(song.sections, song.key, state.previewKey);
   const hasTime = Boolean(song.timeSignature && /^\d+\/\d+$/.test(song.timeSignature));
   const [beats, unit] = hasTime ? song.timeSignature.split("/") : ["", ""];
+
+  if (reading) {
+    const profile = resolveChartLayoutProfile(song);
+    const pages = paginateChart({ ...song, sections }, profile);
+    const totalPages = pages.length;
+    const { pageIndex } = getChartReadingPosition(song);
+    state.stagePage = pageIndex;
+    const activePage = pages[pageIndex - 1] || pages[0];
+    const sheetEl = paper.closest(".paper.sheet");
+    if (sheetEl) {
+      sheetEl.dataset.page = String(pageIndex);
+      sheetEl.dataset.totalPages = String(totalPages);
+    }
+
+    let bar = 1 + pages
+      .slice(0, pageIndex - 1)
+      .reduce((sum, p) => sum + p.sections.reduce((sSum, sec) => sSum + sec.rows.reduce((rSum, r) => rSum + r.measures.length, 0), 0), 0);
+    let firstLine = pageIndex === 1;
+    const lastFragment = activePage.sections[activePage.sections.length - 1];
+
+    paper.innerHTML = activePage.sections.map((fragment) => {
+      const named = fragment.label.trim().length > 1;
+      const shownLabel = fragment.continued && named ? `${fragment.label} (cont.)` : fragment.label;
+      const letter = `<div class="rehearsal static">${esc(shownLabel)}</div>`;
+      const lines = fragment.rows.map((row, rowIndex) => {
+        const showTime = firstLine && hasTime;
+        firstLine = false;
+        const isLastLineOfSong =
+          pageIndex === totalPages &&
+          fragment === lastFragment &&
+          rowIndex === fragment.rows.length - 1;
+        const cells = row.measures.map((measure, index) => {
+          const last = index === row.measures.length - 1;
+          const fullRow = row.measures.length === profile.barsPerRow;
+          return measureCell(measure, bar++, false, isLastLineOfSong && last, last && fullRow && !(isLastLineOfSong && last));
+        }).join("");
+        return `<div class="staff-line" style="--bars:${profile.barsPerRow}">
+          ${rowIndex === 0 && !named ? letter : ""}
+          ${showTime ? `<div class="time-sig" aria-hidden="true"><span>${esc(beats)}</span><span>${esc(unit)}</span></div>` : ""}
+          ${cells}
+        </div>`;
+      }).join("");
+      return `<div class="system${named ? " named" : ""}" data-section-id="${esc(fragment.sectionId)}" data-continued="${fragment.continued ? "true" : "false"}">${named ? `<div class="section-head">${letter}</div>` : ""}${lines}</div>`;
+    }).join("");
+
+    fitHeaderFields();
+    fitGlyphs();
+    return;
+  }
+
   let bar = 1;
   let firstLine = true;
   const lastSection = sections[sections.length - 1];
@@ -1278,10 +1402,12 @@ function viewStage() {
   }).join("");
   const next = setlist.items[state.stageIndex + 1];
   const nextSong = next ? findSong(state.library, next.songId) : null;
-  const pages = getSongPageCount(song);
-  const page = Math.min(state.stagePage, pages);
-  const canPrev = canStepPerformance({ itemIndex: state.stageIndex, page }, -1, { items: setlist.items, library: state.library });
-  const canNext = canStepPerformance({ itemIndex: state.stageIndex, page }, 1, { items: setlist.items, library: state.library });
+  const pageOptions = performancePageOptions(song);
+  const pages = getSongPageCount(song, pageOptions);
+  const page = Math.min(Math.max(1, state.stagePage || 1), pages);
+  state.stagePage = page;
+  const canPrev = canStepPerformance({ itemIndex: state.stageIndex, page }, -1, { items: setlist.items, library: state.library, ...pageOptions });
+  const canNext = canStepPerformance({ itemIndex: state.stageIndex, page }, 1, { items: setlist.items, library: state.library, ...pageOptions });
   return `<section>
     <div class="stage-bar no-print">
       <button class="btn ghost" type="button" data-action="exit-stage">Sair do palco</button>
@@ -1294,18 +1420,21 @@ function viewStage() {
     </div>
     ${readToggle(song)}
     ${tapLayer()}
-    ${showingPdf(song) ? pdfStage(song, page) : `<article class="paper sheet" id="stage-paper">
-      <div class="lead">
-      <h1 class="sheet-title">${esc(song.title)}</h1>
-      <div class="sheet-sub">
-        <p class="sheet-style">${song.style ? `(${esc(song.style)})` : ""}</p>
-        <p class="sheet-composer">${esc(song.composer)}</p>
-      </div>
-      <div id="paper-body"></div>
-      ${song.notes ? `<p class="sheet-notes static">${esc(song.notes)}</p>` : ""}
-      <p class="hint">${nextSong ? `A seguir: ${esc(nextSong.title)} · ${esc(next?.key || nextSong.key)}` : "Última música da setlist."}</p>
-      </div>
-    </article>`}
+    ${showingPdf(song) ? pdfStage(song, page) : `<div class="reading-viewport" id="chart-reading-viewport">
+      <article class="paper sheet" id="stage-paper">
+        <div class="lead">
+        <h1 class="sheet-title">${esc(song.title)}</h1>
+        <div class="sheet-sub">
+          <p class="sheet-style">${song.style ? `(${esc(song.style)})` : ""}</p>
+          <p class="sheet-composer">${esc(song.composer)}</p>
+        </div>
+        <div id="paper-body"></div>
+        ${song.notes && page === pages ? `<p class="sheet-notes static">${esc(song.notes)}</p>` : ""}
+        <p class="hint">${nextSong ? `A seguir: ${esc(nextSong.title)} · ${esc(next?.key || nextSong.key)}` : "Última música da setlist."}</p>
+        </div>
+      </article>
+      ${chartReadingBar(song)}
+    </div>`}
   </section>`;
 }
 
@@ -2140,7 +2269,9 @@ async function exportLibrary() {
 function stepPerformance(direction) {
   const onStage = state.route.name === "stage";
   const setlist = onStage ? currentSetlist() : null;
-  const items = setlist?.items || (currentSong() ? [{ songId: currentSong().id }] : []);
+  const song = currentSong();
+  const items = setlist?.items || (song ? [{ songId: song.id }] : []);
+  const pageOptions = performancePageOptions(song);
 
   const currentPos = {
     itemIndex: onStage ? state.stageIndex : 0,
@@ -2150,9 +2281,13 @@ function stepPerformance(direction) {
   const nextPos = stepPerformancePosition(currentPos, direction, {
     items,
     library: state.library,
+    ...pageOptions,
   });
 
   if (onStage) {
+    if (nextPos.changedSong) {
+      state.stageChart = false;
+    }
     state.stageIndex = nextPos.itemIndex;
     state.stagePage = nextPos.page;
   } else {
@@ -2328,29 +2463,7 @@ function fitGlyphs() {
 function fitPerformanceSheet() {
   const paper = document.querySelector(".paper.sheet");
   if (!paper) return;
-  const performance = document.body.classList.contains("stage") || document.body.classList.contains("clean");
   clearSheetFit(paper);
-  if (!performance || document.querySelector(".pdf-read")) {
-    fitGlyphs();
-    return;
-  }
-  const top = paper.getBoundingClientRect().top;
-  const availableH = Math.max(120, window.innerHeight - top - 52);
-  const availableW = Math.max(160, window.innerWidth - 16);
-  const naturalW = paper.offsetWidth;
-  const naturalH = paper.offsetHeight;
-
-  // Política para cifras longas: manter escala mínima legível a distância de estante
-  const MIN_READABLE_SCALE = 0.70;
-  const rawScale = Math.min(availableW / naturalW, availableH / naturalH);
-  if (!Number.isFinite(rawScale) || rawScale <= 0) return;
-
-  const scale = Math.min(Math.max(MIN_READABLE_SCALE, rawScale), 1.65);
-  if (scale < 0.995) {
-    paper.style.transformOrigin = "top center";
-    paper.style.transform = `scale(${scale})`;
-    paper.style.marginBottom = `${(scale - 1) * naturalH}px`;
-  }
   fitGlyphs();
 }
 
@@ -2732,7 +2845,7 @@ function removeButton(index) {
 }
 
 function readToggle(song) {
-  if (showingPdf(song)) return "";
+  if (showingPdf(song) || isReadingChart(song)) return "";
   return `<button class="btn ghost read-toggle no-print" type="button" data-action="toggle-clean">${readLabel(song)}</button>`;
 }
 
