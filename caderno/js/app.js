@@ -34,7 +34,12 @@ import { parseCifraSource, verifyCifraSourceInvariants } from "./source.js";
 import { ALL_SIX_FIXTURES } from "./fixtures/cifras.js";
 import { analyzeSamples } from "./listen.js";
 import { inspectPdf, paintPdf, releasePdf } from "./pdfview.js";
-import { getChartPageCount, paginateChart } from "./chart-pages.js";
+import {
+  composePageSpread,
+  getChartPageCount,
+  paginateChart,
+  resolveReadingLayoutProfile,
+} from "./chart-pages.js";
 import {
   blankMeasure,
   blankPlaylist,
@@ -83,6 +88,8 @@ const state = {
   stageRouteId: "",
   songRouteId: "",
   clean: false,
+  fullscreen: false,
+  fullscreenFallback: false,
   confirm: null,
   wizard: null,
   currentDraft: null,
@@ -333,6 +340,10 @@ document.addEventListener("keydown", (event) => {
     }
     if (modalRoot.childElementCount) {
       closeModal();
+      return;
+    }
+    if (state.fullscreen) {
+      exitFullscreenReading();
       return;
     }
     if (state.clean && !document.body.classList.contains("stage")) {
@@ -794,10 +805,17 @@ const actions = {
       return;
     }
     state.clean = !state.clean;
+    if (!state.clean && state.fullscreen) {
+      exitFullscreenReading();
+      return;
+    }
     if (state.route.name === "song") {
       state.stagePage = 1;
     }
     renderAll();
+  },
+  "toggle-fullscreen": () => {
+    toggleFullscreenReading();
   },
   "read-pdf": () => {
     state.clean = true;
@@ -865,6 +883,9 @@ function renderAll() {
       state.stageRouteId = state.route.id;
       state.stageChart = false;
       state.stagePage = 1;
+      state.clean = false;
+      state.fullscreen = false;
+      state.fullscreenFallback = false;
     }
   } else {
     state.stageRouteId = "";
@@ -873,15 +894,22 @@ function renderAll() {
     if (state.songRouteId !== state.route.id) {
       state.songRouteId = state.route.id;
       state.clean = false;
+      state.fullscreen = false;
+      state.fullscreenFallback = false;
       state.stagePage = 1;
     }
   } else {
     state.songRouteId = "";
   }
-  if (state.route.name !== "song" && state.route.name !== "stage") state.clean = false;
+  if (state.route.name !== "song" && state.route.name !== "stage") {
+    state.clean = false;
+    state.fullscreen = false;
+    state.fullscreenFallback = false;
+  }
   document.body.classList.toggle("stage", state.route.name === "stage");
   document.body.classList.toggle("sheet", state.route.name === "song" || state.route.name === "stage");
   document.body.classList.toggle("clean", state.clean && (state.route.name === "song" || state.route.name === "stage"));
+  document.body.classList.toggle("fullscreen-reading", Boolean(state.fullscreen && (state.route.name === "song" || state.route.name === "stage")));
   renderNav();
   renderList();
   renderMain();
@@ -1012,18 +1040,9 @@ function viewSong() {
         <button class="btn ghost" type="button" data-action="clear-preview">Voltar</button>
       </span>
     </div>
-    ${showingPdf(song) ? pdfStage(song, state.stagePage) : isReadingChart(song) ? `${tapLayer()}<div class="reading-viewport" id="chart-reading-viewport">
-      <article class="paper sheet" id="clean-paper">
-        <div class="lead">
-          <h1 class="sheet-title">${esc(song.title)}</h1>
-          <div class="sheet-sub">
-            <p class="sheet-style">${song.style ? `(${esc(song.style)})` : ""}</p>
-            <p class="sheet-composer">${esc(song.composer)}</p>
-          </div>
-          <div id="paper-body"></div>
-        </div>
-      </article>
-      ${chartReadingBar(song)}
+    ${showingPdf(song) ? pdfStage(song, state.stagePage) : isReadingChart(song) ? `${tapLayer()}<div class="reading-viewport" id="chart-reading-viewport" data-fullscreen="${state.fullscreen ? "true" : "false"}">
+      <div class="reading-spread" id="chart-reading-spread"></div>
+      <div id="chart-reading-bar-host">${chartReadingBar(song)}</div>
     </div>` : `<article class="paper sheet">
       <div class="lead">
       <input class="sheet-title" data-field="title" value="${esc(song.title)}" aria-label="Título" autocomplete="off" spellcheck="false">
@@ -1096,21 +1115,28 @@ function fitHeaderFields() {
  * @typedef {Object} ChartReadingPosition
  * @property {number} songIndex
  * @property {number} pageIndex
+ * @property {import("./chart-pages.js").ReadingSpread} spread
+ * @property {import("./chart-pages.js").ChartLayoutProfile & { usableSheetWidth: number, minSheetWidth: number }} profile
+ * @property {import("./chart-pages.js").ChartPage[]} pages
  */
 
 function isReadingChart(song) {
   if (!song || showingPdf(song)) return false;
-  return state.route.name === "stage" || Boolean(state.clean);
+  return state.route.name === "stage" || Boolean(state.clean) || Boolean(state.fullscreen);
 }
 
 function resolveChartLayoutProfile(song) {
   const barsPerRow = Number(song?.barsPerRow) || 4;
-  const rowsPerPage = typeof window !== "undefined" && window.innerHeight < 500 ? 4 : 8;
-  return {
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 1024;
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 768;
+  const cleanOrFullscreen = Boolean(state.clean || state.fullscreen);
+  return resolveReadingLayoutProfile({
+    viewportWidth,
+    viewportHeight,
     barsPerRow,
-    rowsPerPage,
-    pageSpan: 1,
-  };
+    horizontalChrome: cleanOrFullscreen ? 16 : 36,
+    verticalChrome: cleanOrFullscreen ? 84 : 136,
+  });
 }
 
 function getRuntimeChartPageCount(song) {
@@ -1119,12 +1145,18 @@ function getRuntimeChartPageCount(song) {
   return getChartPageCount({ ...song, sections }, resolveChartLayoutProfile(song));
 }
 
+function getRuntimeChartPageSpan(song) {
+  if (!song) return 1;
+  return resolveChartLayoutProfile(song).pageSpan || 1;
+}
+
 function performancePageOptions(song) {
   const hasPdf = Boolean(song?.pdfRef || song?.pdfName || Number(song?.pdfPages) > 1);
   const forceChart = Boolean(song && !showingPdf(song) && hasPdf);
   return {
     representation: forceChart ? "chart" : "auto",
     chartPageCount: getRuntimeChartPageCount,
+    chartPageSpan: getRuntimeChartPageSpan,
   };
 }
 
@@ -1133,10 +1165,90 @@ function performancePageOptions(song) {
  * @returns {ChartReadingPosition}
  */
 function getChartReadingPosition(song) {
-  const pages = getSongPageCount(song, performancePageOptions(song));
-  const pageIndex = Math.min(Math.max(1, Number(state.stagePage) || 1), pages);
+  const profile = resolveChartLayoutProfile(song);
+  const sections = song ? transposeSections(song.sections || [], song.key, state.previewKey) : [];
+  const pages = song ? paginateChart({ ...song, sections }, profile) : [];
+  const spread = composePageSpread(pages, state.stagePage || 1, profile);
   const songIndex = state.route.name === "stage" ? Math.max(0, Number(state.stageIndex) || 0) : 0;
-  return { songIndex, pageIndex };
+  return {
+    songIndex,
+    pageIndex: spread.firstPage,
+    spread,
+    profile,
+    pages,
+  };
+}
+
+function isFullscreenApiSupported() {
+  if (typeof document === "undefined") return false;
+  const root = /** @type {any} */ (document.documentElement);
+  const doc = /** @type {any} */ (document);
+  const enabled = doc.fullscreenEnabled ?? doc.webkitFullscreenEnabled ?? true;
+  const canRequest = typeof (root?.requestFullscreen || root?.webkitRequestFullscreen) === "function";
+  return Boolean(enabled && canRequest);
+}
+
+async function toggleFullscreenReading() {
+  if (state.fullscreen) {
+    await exitFullscreenReading();
+    return;
+  }
+  await enterFullscreenReading();
+}
+
+async function enterFullscreenReading() {
+  const song = currentSong();
+  if (!song) return;
+  if (state.route.name === "song" && !state.clean) {
+    state.clean = true;
+  }
+  state.fullscreen = true;
+  state.fullscreenFallback = false;
+
+  if (!isFullscreenApiSupported()) {
+    state.fullscreenFallback = true;
+    renderAll();
+    toast("Tela cheia nativa indisponível; leitura expandida na janela.");
+    return;
+  }
+
+  try {
+    const root = /** @type {any} */ (document.documentElement);
+    const req = root.requestFullscreen || root.webkitRequestFullscreen;
+    await req.call(root);
+    state.fullscreenFallback = false;
+  } catch {
+    state.fullscreenFallback = true;
+    toast("Tela cheia nativa indisponível; leitura expandida na janela.");
+  }
+  renderAll();
+}
+
+async function exitFullscreenReading() {
+  state.fullscreen = false;
+  state.fullscreenFallback = false;
+  try {
+    const doc = /** @type {any} */ (document);
+    if (doc.fullscreenElement && typeof doc.exitFullscreen === "function") {
+      await doc.exitFullscreen();
+    } else if (doc.webkitFullscreenElement && typeof doc.webkitExitFullscreen === "function") {
+      await doc.webkitExitFullscreen();
+    }
+  } catch {
+    // Ignora falha ao sair da API nativa e restaura a interface
+  }
+  renderAll();
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("fullscreenchange", () => {
+    const doc = /** @type {any} */ (document);
+    const active = Boolean(doc.fullscreenElement || doc.webkitFullscreenElement);
+    if (!active && state.fullscreen && !state.fullscreenFallback) {
+      state.fullscreen = false;
+      renderAll();
+    }
+  });
 }
 
 function chartReadingBar(song) {
@@ -1145,22 +1257,64 @@ function chartReadingBar(song) {
   const items = setlist?.items || (song ? [{ songId: song.id }] : []);
   const pageOptions = performancePageOptions(song);
   const pages = getSongPageCount(song, pageOptions);
-  const { songIndex, pageIndex } = getChartReadingPosition(song);
+  const { songIndex, pageIndex, spread } = getChartReadingPosition(song);
   const currentPos = { itemIndex: songIndex, page: pageIndex };
   const canPrev = canStepPerformance(currentPos, -1, { items, library: state.library, ...pageOptions });
   const canNext = canStepPerformance(currentPos, 1, { items, library: state.library, ...pageOptions });
+  const visibleIndexes = spread.visiblePages.map((p) => p.index);
+  const pageLabel = visibleIndexes.length > 1
+    ? `Página ${visibleIndexes[0]}–${visibleIndexes.at(-1)} de ${pages}`
+    : `Página ${pageIndex} de ${pages}`;
+  const fallbackNote = state.fullscreen && state.fullscreenFallback
+    ? `<span class="fullscreen-fallback-note" id="fullscreen-fallback-status" role="status">Modo janela (API de tela cheia indisponível)</span>`
+    : "";
   return `<div class="chart-reading-bar no-print" role="region" aria-label="Navegação de páginas da cifra">
     <button class="btn ghost" type="button" data-action="toggle-clean">${readLabel(song)}</button>
     <button class="btn ghost" type="button" data-action="stage-step" data-dir="-1" aria-label="Página anterior" ${canPrev ? "" : "disabled"}>Anterior</button>
-    <p class="chart-page-caption" id="chart-page-indicator" aria-live="polite">${esc(song.title)} · Página ${pageIndex} de ${pages}</p>
+    <p class="chart-page-caption" id="chart-page-indicator" aria-live="polite">${esc(song.title)} · ${pageLabel}</p>
     <button class="btn ghost" type="button" data-action="stage-step" data-dir="1" aria-label="Próxima página" ${canNext ? "" : "disabled"}>Próxima</button>
+    <button class="btn ghost" type="button" data-action="toggle-fullscreen" aria-pressed="${state.fullscreen ? "true" : "false"}">${state.fullscreen ? "Sair da tela cheia" : "Tela cheia"}</button>
+    ${fallbackNote}
   </div>`;
+}
+
+function renderReadingPageFragments(activePage, pages, totalPages, profile, hasTime, beats, unit) {
+  const pageIndex = activePage.index;
+  let bar = 1 + pages
+    .slice(0, pageIndex - 1)
+    .reduce((sum, p) => sum + p.sections.reduce((sSum, sec) => sSum + sec.rows.reduce((rSum, r) => rSum + r.measures.length, 0), 0), 0);
+  let firstLine = pageIndex === 1;
+  const lastFragment = activePage.sections[activePage.sections.length - 1];
+
+  return activePage.sections.map((fragment) => {
+    const named = fragment.label.trim().length > 1;
+    const shownLabel = fragment.continued && named ? `${fragment.label} (cont.)` : fragment.label;
+    const letter = `<div class="rehearsal static">${esc(shownLabel)}</div>`;
+    const lines = fragment.rows.map((row, rowIndex) => {
+      const showTime = firstLine && hasTime;
+      firstLine = false;
+      const isLastLineOfSong =
+        pageIndex === totalPages &&
+        fragment === lastFragment &&
+        rowIndex === fragment.rows.length - 1;
+      const cells = row.measures.map((measure, index) => {
+        const last = index === row.measures.length - 1;
+        const fullRow = row.measures.length === profile.barsPerRow;
+        return measureCell(measure, bar++, false, isLastLineOfSong && last, last && fullRow && !(isLastLineOfSong && last));
+      }).join("");
+      return `<div class="staff-line" style="--bars:${profile.barsPerRow}">
+        ${rowIndex === 0 && !named ? letter : ""}
+        ${showTime ? `<div class="time-sig" aria-hidden="true"><span>${esc(beats)}</span><span>${esc(unit)}</span></div>` : ""}
+        ${cells}
+      </div>`;
+    }).join("");
+    return `<div class="system${named ? " named" : ""}" data-section-id="${esc(fragment.sectionId)}" data-continued="${fragment.continued ? "true" : "false"}">${named ? `<div class="section-head">${letter}</div>` : ""}${lines}</div>`;
+  }).join("");
 }
 
 function paintPaper(focusId) {
   const song = currentSong();
-  const paper = document.querySelector("#paper-body");
-  if (!song || !paper) return;
+  if (!song) return;
   const reading = isReadingChart(song);
   const editable = state.route.name === "song" && !state.clean && !state.previewKey;
   const sections = editable ? song.sections : transposeSections(song.sections, song.key, state.previewKey);
@@ -1168,53 +1322,55 @@ function paintPaper(focusId) {
   const [beats, unit] = hasTime ? song.timeSignature.split("/") : ["", ""];
 
   if (reading) {
-    const profile = resolveChartLayoutProfile(song);
-    const pages = paginateChart({ ...song, sections }, profile);
+    const spreadHost = /** @type {HTMLElement | null} */ (document.querySelector("#chart-reading-spread"));
+    if (!spreadHost) return;
+    const { pageIndex, spread, profile, pages } = getChartReadingPosition(song);
     const totalPages = pages.length;
-    const { pageIndex } = getChartReadingPosition(song);
     state.stagePage = pageIndex;
-    const activePage = pages[pageIndex - 1] || pages[0];
-    const sheetEl = paper.closest(".paper.sheet");
-    if (sheetEl) {
-      sheetEl.dataset.page = String(pageIndex);
-      sheetEl.dataset.totalPages = String(totalPages);
-    }
 
-    let bar = 1 + pages
-      .slice(0, pageIndex - 1)
-      .reduce((sum, p) => sum + p.sections.reduce((sSum, sec) => sSum + sec.rows.reduce((rSum, r) => rSum + r.measures.length, 0), 0), 0);
-    let firstLine = pageIndex === 1;
-    const lastFragment = activePage.sections[activePage.sections.length - 1];
+    const onStage = state.route.name === "stage";
+    const setlist = onStage ? currentSetlist() : null;
+    const nextEntry = setlist?.items?.[state.stageIndex + 1];
+    const nextSong = nextEntry ? findSong(state.library, nextEntry.songId) : null;
 
-    paper.innerHTML = activePage.sections.map((fragment) => {
-      const named = fragment.label.trim().length > 1;
-      const shownLabel = fragment.continued && named ? `${fragment.label} (cont.)` : fragment.label;
-      const letter = `<div class="rehearsal static">${esc(shownLabel)}</div>`;
-      const lines = fragment.rows.map((row, rowIndex) => {
-        const showTime = firstLine && hasTime;
-        firstLine = false;
-        const isLastLineOfSong =
-          pageIndex === totalPages &&
-          fragment === lastFragment &&
-          rowIndex === fragment.rows.length - 1;
-        const cells = row.measures.map((measure, index) => {
-          const last = index === row.measures.length - 1;
-          const fullRow = row.measures.length === profile.barsPerRow;
-          return measureCell(measure, bar++, false, isLastLineOfSong && last, last && fullRow && !(isLastLineOfSong && last));
-        }).join("");
-        return `<div class="staff-line" style="--bars:${profile.barsPerRow}">
-          ${rowIndex === 0 && !named ? letter : ""}
-          ${showTime ? `<div class="time-sig" aria-hidden="true"><span>${esc(beats)}</span><span>${esc(unit)}</span></div>` : ""}
-          ${cells}
-        </div>`;
-      }).join("");
-      return `<div class="system${named ? " named" : ""}" data-section-id="${esc(fragment.sectionId)}" data-continued="${fragment.continued ? "true" : "false"}">${named ? `<div class="section-head">${letter}</div>` : ""}${lines}</div>`;
+    spreadHost.className = `reading-spread ${spread.pageSpan === 2 ? "is-double" : "is-single"}${spread.pageSpan === 2 && spread.visiblePages.length < 2 ? " is-incomplete" : ""}`;
+    spreadHost.dataset.pageSpan = String(spread.pageSpan);
+    spreadHost.dataset.firstPage = String(spread.firstPage);
+    spreadHost.dataset.visiblePages = spread.visiblePages.map((p) => p.index).join(",");
+    spreadHost.dataset.minSheetWidth = String(profile.minSheetWidth || 420);
+    spreadHost.style.setProperty("--sheet-target-width", `${profile.usableSheetWidth}px`);
+
+    spreadHost.innerHTML = spread.visiblePages.map((activePage, spreadIdx) => {
+      const sheetId = onStage
+        ? (spreadIdx === 0 ? "stage-paper" : `stage-paper-${spreadIdx + 1}`)
+        : (spreadIdx === 0 ? "clean-paper" : `clean-paper-${spreadIdx + 1}`);
+      const bodyId = spreadIdx === 0 ? "paper-body" : `paper-body-${spreadIdx + 1}`;
+      const isLastVisibleSheet = spreadIdx === spread.visiblePages.length - 1;
+      const bodyHtml = renderReadingPageFragments(activePage, pages, totalPages, profile, hasTime, beats, unit);
+      return `<article class="paper sheet" id="${sheetId}" data-page="${activePage.index}" data-total-pages="${totalPages}">
+        <div class="lead">
+          <h1 class="sheet-title">${esc(song.title)}</h1>
+          <div class="sheet-sub">
+            <p class="sheet-style">${song.style ? `(${esc(song.style)})` : ""}</p>
+            <p class="sheet-composer">${esc(song.composer)}</p>
+          </div>
+          <div id="${bodyId}" class="paper-body">${bodyHtml}</div>
+          ${onStage && song.notes && activePage.index === totalPages ? `<p class="sheet-notes static">${esc(song.notes)}</p>` : ""}
+          ${onStage && isLastVisibleSheet ? `<p class="hint">${nextSong ? `A seguir: ${esc(nextSong.title)} · ${esc(nextEntry?.key || nextSong.key)}` : "Última música da setlist."}</p>` : ""}
+        </div>
+      </article>`;
     }).join("");
+
+    const barHost = document.querySelector("#chart-reading-bar-host");
+    if (barHost) barHost.innerHTML = chartReadingBar(song);
 
     fitHeaderFields();
     fitGlyphs();
     return;
   }
+
+  const paper = document.querySelector("#paper-body");
+  if (!paper) return;
 
   let bar = 1;
   let firstLine = true;
@@ -1400,11 +1556,11 @@ function viewStage() {
     const label = `${index + 1}. ${entrySong?.title || "Cifra ausente"}`;
     return `<option value="${index}"${index === state.stageIndex ? " selected" : ""}>${esc(label)}</option>`;
   }).join("");
-  const next = setlist.items[state.stageIndex + 1];
-  const nextSong = next ? findSong(state.library, next.songId) : null;
   const pageOptions = performancePageOptions(song);
   const pages = getSongPageCount(song, pageOptions);
-  const page = Math.min(Math.max(1, state.stagePage || 1), pages);
+  const page = showingPdf(song)
+    ? Math.min(Math.max(1, state.stagePage || 1), pages)
+    : getChartReadingPosition(song).pageIndex;
   state.stagePage = page;
   const canPrev = canStepPerformance({ itemIndex: state.stageIndex, page }, -1, { items: setlist.items, library: state.library, ...pageOptions });
   const canNext = canStepPerformance({ itemIndex: state.stageIndex, page }, 1, { items: setlist.items, library: state.library, ...pageOptions });
@@ -1420,20 +1576,9 @@ function viewStage() {
     </div>
     ${readToggle(song)}
     ${tapLayer()}
-    ${showingPdf(song) ? pdfStage(song, page) : `<div class="reading-viewport" id="chart-reading-viewport">
-      <article class="paper sheet" id="stage-paper">
-        <div class="lead">
-        <h1 class="sheet-title">${esc(song.title)}</h1>
-        <div class="sheet-sub">
-          <p class="sheet-style">${song.style ? `(${esc(song.style)})` : ""}</p>
-          <p class="sheet-composer">${esc(song.composer)}</p>
-        </div>
-        <div id="paper-body"></div>
-        ${song.notes && page === pages ? `<p class="sheet-notes static">${esc(song.notes)}</p>` : ""}
-        <p class="hint">${nextSong ? `A seguir: ${esc(nextSong.title)} · ${esc(next?.key || nextSong.key)}` : "Última música da setlist."}</p>
-        </div>
-      </article>
-      ${chartReadingBar(song)}
+    ${showingPdf(song) ? pdfStage(song, page) : `<div class="reading-viewport" id="chart-reading-viewport" data-fullscreen="${state.fullscreen ? "true" : "false"}">
+      <div class="reading-spread" id="chart-reading-spread"></div>
+      <div id="chart-reading-bar-host">${chartReadingBar(song)}</div>
     </div>`}
   </section>`;
 }
@@ -2461,9 +2606,9 @@ function fitGlyphs() {
 }
 
 function fitPerformanceSheet() {
-  const paper = document.querySelector(".paper.sheet");
-  if (!paper) return;
-  clearSheetFit(paper);
+  for (const paper of document.querySelectorAll(".paper.sheet")) {
+    clearSheetFit(paper);
+  }
   fitGlyphs();
 }
 

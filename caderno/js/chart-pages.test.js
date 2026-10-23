@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { composeChartRows, composePageSpread, getChartPageCount, paginateChart } from "./chart-pages.js";
+import {
+  composeChartRows,
+  composePageSpread,
+  getChartPageCount,
+  normalizeSpreadPage,
+  paginateChart,
+  resolveReadingLayoutProfile,
+} from "./chart-pages.js";
 
 function song(sectionSizes, barsPerRow = 4) {
   let measureIndex = 0;
@@ -124,4 +131,38 @@ test("composePageSpread agrupa páginas em 1-up e 2-up", () => {
   assert.deepEqual(composePageSpread(pages, 2, 1).visiblePages.map((page) => page.index), [2]);
   assert.deepEqual(composePageSpread(pages, 2, 2).visiblePages.map((page) => page.index), [1, 2]);
   assert.deepEqual(composePageSpread(pages, 3, { pageSpan: 2 }).visiblePages.map((page) => page.index), [3]);
+});
+
+test("resolveReadingLayoutProfile usa largura útil de cada folha e mantém 1-up em celular e retrato", () => {
+  const mobilePortrait = resolveReadingLayoutProfile({ viewportWidth: 390, viewportHeight: 844 });
+  const mobileLandscape = resolveReadingLayoutProfile({ viewportWidth: 844, viewportHeight: 390 });
+  const tabletPortrait = resolveReadingLayoutProfile({ viewportWidth: 768, viewportHeight: 1024 });
+  const tabletLandscape = resolveReadingLayoutProfile({ viewportWidth: 1024, viewportHeight: 768 });
+  const notebook1366 = resolveReadingLayoutProfile({ viewportWidth: 1366, viewportHeight: 768 });
+  const notebook1440 = resolveReadingLayoutProfile({ viewportWidth: 1440, viewportHeight: 900 });
+
+  assert.equal(mobilePortrait.pageSpan, 1);
+  assert.equal(mobileLandscape.pageSpan, 1);
+  assert.equal(mobileLandscape.rowsPerPage, 4);
+  assert.equal(tabletPortrait.pageSpan, 1);
+
+  assert.equal(tabletLandscape.pageSpan, 2);
+  assert.ok(tabletLandscape.usableSheetWidth >= tabletLandscape.minSheetWidth);
+
+  assert.equal(notebook1366.pageSpan, 2);
+  assert.ok(notebook1366.usableSheetWidth >= notebook1366.minSheetWidth);
+
+  assert.equal(notebook1440.pageSpan, 2);
+  assert.ok(notebook1440.usableSheetWidth >= notebook1440.minSheetWidth);
+
+  // Quando a barra é meia (8 compassos por linha), o piso de largura útil por folha sobe para 560px
+  const denseTablet = resolveReadingLayoutProfile({ viewportWidth: 1024, viewportHeight: 768, barsPerRow: 8 });
+  assert.equal(denseTablet.pageSpan, 1);
+});
+
+test("normalizeSpreadPage normaliza posição ao alternar entre 1-up e 2-up e permite última dupla incompleta", () => {
+  assert.equal(normalizeSpreadPage(2, 3, 2), 1);
+  assert.equal(normalizeSpreadPage(3, 3, 2), 3);
+  assert.equal(normalizeSpreadPage(4, 4, 2), 3);
+  assert.equal(normalizeSpreadPage(2, 3, 1), 2);
 });

@@ -603,6 +603,33 @@ export function getSongPageCount(song, { representation = "auto", chartPageCount
 }
 
 /**
+ * Retorna a quantidade de páginas visíveis simultaneamente (1-up ou 2-up).
+ * PDFs permanecem em 1 página por vez; cifras HTML podem usar 1 ou 2 páginas.
+ *
+ * @param {any} song
+ * @param {Object} [options]
+ * @param {"auto" | "chart" | "pdf"} [options.representation]
+ * @param {(song: any) => number} [options.chartPageSpan]
+ * @param {number} [options.pageSpan]
+ * @returns {number}
+ */
+export function getSongPageSpan(song, { representation = "auto", chartPageSpan, pageSpan } = {}) {
+  if (!song) return 1;
+  const legacyPdfPages = Math.max(0, Number(song.pdfPages) || 0);
+  const hasPdf = Boolean(song.pdfRef || song.pdfName || legacyPdfPages > 1);
+  if (representation !== "chart" && hasPdf) {
+    return 1;
+  }
+  if (typeof chartPageSpan === "function") {
+    const span = Math.floor(Number(chartPageSpan(song)));
+    if (Number.isFinite(span) && span > 0) return Math.min(2, span);
+  }
+  const directSpan = Math.floor(Number(pageSpan));
+  if (Number.isFinite(directSpan) && directSpan > 0) return Math.min(2, directSpan);
+  return 1;
+}
+
+/**
  * @typedef {Object} PerformancePosition
  * @property {number} itemIndex Índice do item ativo na setlist (0-indexed)
  * @property {number} page Página relativa da música ativa (1-indexed)
@@ -626,6 +653,8 @@ export function getSongPageCount(song, { representation = "auto", chartPageCount
  * @param {any} [context.library] Catálogo da biblioteca para consulta de páginas
  * @param {"auto" | "chart" | "pdf"} [context.representation] Representação navegada
  * @param {(song: any) => number} [context.chartPageCount] Contador runtime para cifras HTML
+ * @param {(song: any) => number} [context.chartPageSpan] Span runtime (1-up/2-up) para cifras HTML
+ * @param {number} [context.pageSpan] Span explícito (1 ou 2)
  * @returns {StepPerformanceResult}
  */
 export function stepPerformancePosition(position, direction, {
@@ -633,32 +662,39 @@ export function stepPerformancePosition(position, direction, {
   library = null,
   representation = "auto",
   chartPageCount,
+  chartPageSpan,
+  pageSpan,
 } = {}) {
   const dir = direction === "prev" || direction === "previous" || Number(direction) < 0 ? -1 : 1;
   const itemCount = Array.isArray(items) ? items.length : 0;
 
   if (itemCount === 0) {
-    const rawPage = Number(position?.page) || 1;
-    const page = dir > 0 ? rawPage + 1 : Math.max(1, rawPage - 1);
+    const span = Math.min(2, Math.max(1, Math.floor(Number(pageSpan)) || 1));
+    const rawPage = Math.max(1, Number(position?.page) || 1);
+    const firstPage = Math.floor((rawPage - 1) / span) * span + 1;
+    const page = dir > 0 ? firstPage + span : Math.max(1, firstPage - span);
     return {
       itemIndex: 0,
       page,
       changedSong: false,
-      reachedBoundary: dir < 0 ? rawPage <= 1 : false,
+      reachedBoundary: dir < 0 ? firstPage <= 1 : false,
     };
   }
 
   const currentIndex = Math.max(0, Math.min(itemCount - 1, Number(position?.itemIndex) || 0));
   const currentSong = library ? findSong(library, items[currentIndex]?.songId) : null;
-  const pageOptions = { representation, chartPageCount };
+  const pageOptions = { representation, chartPageCount, chartPageSpan, pageSpan };
   const currentPages = getSongPageCount(currentSong, pageOptions);
-  const currentPage = Math.max(1, Math.min(currentPages, Number(position?.page) || 1));
+  const currentSpan = getSongPageSpan(currentSong, pageOptions);
+  const clampedPage = Math.max(1, Math.min(currentPages, Number(position?.page) || 1));
+  const currentFirstPage = Math.floor((clampedPage - 1) / currentSpan) * currentSpan + 1;
+  const currentLastVisiblePage = Math.min(currentPages, currentFirstPage + currentSpan - 1);
 
   if (dir > 0) {
-    if (currentPage < currentPages) {
+    if (currentLastVisiblePage < currentPages) {
       return {
         itemIndex: currentIndex,
-        page: currentPage + 1,
+        page: currentFirstPage + currentSpan,
         changedSong: false,
         reachedBoundary: false,
       };
@@ -673,15 +709,15 @@ export function stepPerformancePosition(position, direction, {
     }
     return {
       itemIndex: currentIndex,
-      page: currentPages,
+      page: currentFirstPage,
       changedSong: false,
       reachedBoundary: true,
     };
   } else {
-    if (currentPage > 1) {
+    if (currentFirstPage > 1) {
       return {
         itemIndex: currentIndex,
-        page: currentPage - 1,
+        page: Math.max(1, currentFirstPage - currentSpan),
         changedSong: false,
         reachedBoundary: false,
       };
@@ -689,10 +725,14 @@ export function stepPerformancePosition(position, direction, {
     if (currentIndex > 0) {
       const prevIndex = currentIndex - 1;
       const prevSong = library ? findSong(library, items[prevIndex]?.songId) : null;
-      const prevPages = getSongPageCount(prevSong, pageOptions);
+      /** @type {{ representation: "auto", chartPageCount?: (song: any) => number, chartPageSpan?: (song: any) => number, pageSpan?: number }} */
+      const prevPageOptions = { representation: "auto", chartPageCount, chartPageSpan, pageSpan };
+      const prevPages = getSongPageCount(prevSong, prevPageOptions);
+      const prevSpan = getSongPageSpan(prevSong, prevPageOptions);
+      const prevLastSpreadFirstPage = Math.floor((prevPages - 1) / prevSpan) * prevSpan + 1;
       return {
         itemIndex: prevIndex,
-        page: prevPages,
+        page: prevLastSpreadFirstPage,
         changedSong: true,
         reachedBoundary: false,
       };
@@ -716,6 +756,8 @@ export function stepPerformancePosition(position, direction, {
  * @param {any} [context.library]
  * @param {"auto" | "chart" | "pdf"} [context.representation]
  * @param {(song: any) => number} [context.chartPageCount]
+ * @param {(song: any) => number} [context.chartPageSpan]
+ * @param {number} [context.pageSpan]
  * @returns {boolean}
  */
 export function canStepPerformance(position, direction, context = {}) {

@@ -1369,9 +1369,9 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     };
 
     const errors = await setupPage(page, { library: pagedLibrary, seedPdf: false });
-    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.setViewportSize({ width: 768, height: 1024 });
 
-    // 1. Modo limpo em música individual (#/musicas/song-long-16)
+    // 1. Modo limpo em música individual (#/musicas/song-long-16) em 1-up (retrato)
     await gotoRoute(page, "#/musicas/song-long-16");
     await expect(page.locator("#paper-body .staff-line")).toHaveCount(16);
 
@@ -1442,6 +1442,146 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     await expect(page.locator("#stage-picker")).toHaveValue("0");
     await expect(indicator).toContainText("Página 2 de 2");
     await expect(page.locator("#paper-body").getByText("B1")).toBeVisible();
+
+    expect(errors).toEqual([]);
+  });
+
+  test("fase 17: folhas duplas (1-up/2-up), última página ímpar, resize e tela cheia com fallback e saída por Esc", async ({ page }) => {
+    const makeMeasures = (prefix, count) =>
+      Array.from({ length: count }, (_, idx) => ({
+        id: `${prefix}-${idx + 1}`,
+        chords: idx === 0 ? `${prefix}1` : "Dm7 G7",
+        ending: "",
+        repeat: "",
+      }));
+
+    const spreadLibrary = {
+      version: 2,
+      pdfDocuments: [],
+      songs: [
+        {
+          id: "song-odd-3p",
+          title: "Suíte Três Páginas",
+          composer: "Arranjador",
+          style: "Baião",
+          key: "C",
+          tempo: 116,
+          timeSignature: "4/4",
+          barsPerRow: 4,
+          sections: [
+            { id: "sec-1", label: "Parte A", measures: makeMeasures("A", 32) },
+            { id: "sec-2", label: "Parte B", measures: makeMeasures("B", 32) },
+            { id: "sec-3", label: "Parte C", measures: makeMeasures("C", 32) },
+          ],
+        },
+      ],
+      playlists: [],
+      setlists: [
+        {
+          id: "setlist-spread",
+          name: "Repertório Duplo",
+          items: [{ songId: "song-odd-3p" }],
+        },
+      ],
+    };
+
+    const errors = await setupPage(page, { library: spreadLibrary, seedPdf: false });
+
+    // 1. Celular retrato (390x844) e celular horizontal (844x390) permanecem em 1-up
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoRoute(page, "#/musicas/song-odd-3p");
+    await page.click('[data-action="toggle-clean"]');
+
+    const spread = page.locator("#chart-reading-spread");
+    const indicator = page.locator("#chart-page-indicator");
+    await expect(spread).toHaveAttribute("data-page-span", "1");
+    await expect(spread.locator(".paper.sheet")).toHaveCount(1);
+    await expect(indicator).toContainText("Página 1 de 3");
+
+    await page.setViewportSize({ width: 844, height: 390 });
+    await expect(spread).toHaveAttribute("data-page-span", "1");
+    await expect(spread.locator(".paper.sheet")).toHaveCount(1);
+
+    // 2. Tablet retrato (768x1024): 1-up; avançar para página 2 e rotacionar para 1024x768 normaliza para início da dupla (1-2)
+    await page.setViewportSize({ width: 768, height: 1024 });
+    await expect(spread).toHaveAttribute("data-page-span", "1");
+    await page.keyboard.press("ArrowRight");
+    await expect(indicator).toContainText("Página 2 de 3");
+
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await expect(spread).toHaveAttribute("data-page-span", "2");
+    await expect(spread).toHaveAttribute("data-first-page", "1");
+    await expect(spread.locator(".paper.sheet")).toHaveCount(2);
+    await expect(indicator).toContainText("Página 1–2 de 3");
+    await expect(page.locator("#clean-paper").getByText("A1")).toBeVisible();
+    await expect(page.locator("#clean-paper-2").getByText("B1")).toBeVisible();
+
+    // 3. Avançar em 2-up leva para a última página ímpar (Página 3 de 3, dupla incompleta)
+    await page.keyboard.press("ArrowRight");
+    await expect(spread).toHaveAttribute("data-page-span", "2");
+    await expect(spread).toHaveAttribute("data-first-page", "3");
+    await expect(spread.locator(".paper.sheet")).toHaveCount(1);
+    await expect(indicator).toContainText("Página 3 de 3");
+    await expect(page.locator("#clean-paper").getByText("C1")).toBeVisible();
+
+    // Recuar volta para a dupla 1–2
+    await page.keyboard.press("ArrowLeft");
+    await expect(indicator).toContainText("Página 1–2 de 3");
+    await expect(spread.locator(".paper.sheet")).toHaveCount(2);
+
+    // 4. Notebooks 1366x768 e 1440x900: cada folha respeita o piso de legibilidade (>= 420px) sem overflow horizontal
+    for (const vp of [
+      { width: 1024, height: 768 },
+      { width: 1366, height: 768 },
+      { width: 1440, height: 900 },
+    ]) {
+      await page.setViewportSize(vp);
+      await expect(spread).toHaveAttribute("data-page-span", "2");
+      const metrics = await page.evaluate(() => {
+        const sheets = [...document.querySelectorAll("#chart-reading-spread .paper.sheet")];
+        const minSheetWidth = Number(document.querySelector("#chart-reading-spread")?.getAttribute("data-min-sheet-width") || 420);
+        const widths = sheets.map((s) => s.getBoundingClientRect().width);
+        const lines = [...document.querySelectorAll("#chart-reading-spread .staff-line")];
+        const allLinesVisible = lines.every((l) => {
+          const r = l.getBoundingClientRect();
+          return r.top >= 0 && r.bottom <= window.innerHeight && r.height >= 22;
+        });
+        return {
+          sheetCount: sheets.length,
+          minRenderedWidth: Math.min(...widths),
+          minSheetWidth,
+          overflowX: document.documentElement.scrollWidth - window.innerWidth,
+          allLinesVisible,
+        };
+      });
+      expect(metrics.sheetCount).toBe(2);
+      expect(metrics.minRenderedWidth).toBeGreaterThanOrEqual(metrics.minSheetWidth - 1);
+      expect(metrics.overflowX).toBeLessThanOrEqual(0);
+      expect(metrics.allLinesVisible).toBe(true);
+    }
+
+    // 5. Tela cheia no modo palco com fallback claro quando a API do navegador não está disponível e saída com Esc
+    await gotoRoute(page, "#/setlists/setlist-spread/palco");
+    await expect(page.locator(".stage-bar")).toBeVisible();
+
+    await page.evaluate(() => {
+      Object.defineProperty(document, "fullscreenEnabled", {
+        value: false,
+        configurable: true,
+      });
+    });
+
+    await page.click('[data-action="toggle-fullscreen"]');
+    await expect(page.locator("body")).toHaveClass(/fullscreen-reading/);
+    await expect(page.locator(".stage-bar")).not.toBeVisible();
+    await expect(page.locator("#fullscreen-fallback-status")).toBeVisible();
+    await expect(page.locator('[data-action="toggle-fullscreen"]')).toHaveAttribute("aria-pressed", "true");
+
+    // Pressionar Esc sai da tela cheia e restaura a barra do palco
+    await page.keyboard.press("Escape");
+    await expect(page.locator("body")).not.toHaveClass(/fullscreen-reading/);
+    await expect(page.locator(".stage-bar")).toBeVisible();
+    await expect(page.locator('[data-action="toggle-fullscreen"]')).toHaveAttribute("aria-pressed", "false");
 
     expect(errors).toEqual([]);
   });

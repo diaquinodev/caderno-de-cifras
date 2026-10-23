@@ -35,6 +35,21 @@
  */
 
 /**
+ * @typedef {Object} ReadingSpread
+ * @property {number} firstPage
+ * @property {number} pageSpan
+ * @property {ChartPage[]} visiblePages
+ */
+
+export const DEFAULT_BARS_PER_ROW = 4;
+export const DEFAULT_ROWS_PER_PAGE = 8;
+export const DEFAULT_SECTION_HEADER_UNITS = 1;
+export const DEFAULT_MIN_SHEET_WIDTH = 420;
+export const DEFAULT_SPREAD_GAP = 16;
+export const DEFAULT_HORIZONTAL_CHROME = 36;
+export const DEFAULT_VERTICAL_CHROME = 136;
+
+/**
  * Converte as seções da música em linhas musicais indivisíveis.
  * A função preserva a ordem e não altera a música recebida.
  *
@@ -138,12 +153,78 @@ export function getChartPageCount(song, profile = {}) {
 }
 
 /**
+ * Resolve o perfil de leitura (1-up ou 2-up) pela largura útil de cada folha,
+ * mantendo 1 folha em celular/retrato e ativando 2 folhas apenas quando cada
+ * folha em orientação horizontal respeitar o piso de legibilidade.
+ *
+ * @param {Object} [options]
+ * @param {number} [options.viewportWidth]
+ * @param {number} [options.viewportHeight]
+ * @param {number} [options.barsPerRow]
+ * @param {number} [options.minSheetWidth]
+ * @param {number} [options.spreadGap]
+ * @param {number} [options.horizontalChrome]
+ * @param {number} [options.verticalChrome]
+ * @returns {ChartLayoutProfile & { usableSheetWidth: number, minSheetWidth: number }}
+ */
+export function resolveReadingLayoutProfile(options = {}) {
+  const viewportWidth = positiveInteger(options.viewportWidth, 1024);
+  const viewportHeight = positiveInteger(options.viewportHeight, 768);
+  const barsPerRow = positiveInteger(options.barsPerRow, DEFAULT_BARS_PER_ROW);
+  const baseMinWidth = positiveInteger(options.minSheetWidth, DEFAULT_MIN_SHEET_WIDTH);
+  const minSheetWidth = barsPerRow >= 8 ? Math.max(baseMinWidth, 560) : baseMinWidth;
+  const spreadGap = nonNegativeInteger(options.spreadGap, DEFAULT_SPREAD_GAP);
+  const horizontalChrome = nonNegativeInteger(options.horizontalChrome, DEFAULT_HORIZONTAL_CHROME);
+  const verticalChrome = nonNegativeInteger(options.verticalChrome, DEFAULT_VERTICAL_CHROME);
+
+  const isLandscape = viewportWidth > viewportHeight;
+  const rowsPerPage = viewportHeight < 500 ? 4 : DEFAULT_ROWS_PER_PAGE;
+  const widthPerDualSheet = Math.floor((viewportWidth - horizontalChrome - spreadGap) / 2);
+  const heightBoundedWidth = Math.floor(Math.max(320, (viewportHeight - verticalChrome) * 0.68));
+  const dualSheetWidth = Math.min(widthPerDualSheet, heightBoundedWidth);
+  const canFitDualSheets = isLandscape && viewportHeight >= 560 && dualSheetWidth >= minSheetWidth;
+  const pageSpan = canFitDualSheets ? 2 : 1;
+  const singleSheetWidth = Math.min(
+    Math.max(280, viewportWidth - horizontalChrome),
+    Math.floor(Math.max(360, (viewportHeight - verticalChrome) * 0.68)),
+    960
+  );
+
+  return {
+    barsPerRow,
+    rowsPerPage,
+    sectionHeaderUnits: DEFAULT_SECTION_HEADER_UNITS,
+    pageSpan,
+    minSheetWidth,
+    usableSheetWidth: pageSpan === 2 ? dualSheetWidth : singleSheetWidth,
+  };
+}
+
+/**
+ * Normaliza o índice da página ativa para o início da folha simples ou dupla.
+ *
+ * @param {number} [activePage]
+ * @param {number} [totalPages]
+ * @param {number | ChartLayoutProfile} [spanOrProfile]
+ * @returns {number}
+ */
+export function normalizeSpreadPage(activePage = 1, totalPages = 1, spanOrProfile = 1) {
+  const rawSpan = typeof spanOrProfile === "object" && spanOrProfile !== null
+    ? spanOrProfile.pageSpan
+    : spanOrProfile;
+  const span = Math.min(2, positiveInteger(rawSpan, 1));
+  const total = Math.max(1, positiveInteger(totalPages, 1));
+  const active = Math.min(total, positiveInteger(activePage, 1));
+  return Math.floor((active - 1) / span) * span + 1;
+}
+
+/**
  * Agrupa páginas já compostas em uma folha simples ou dupla.
  *
  * @param {ChartPage[]} pages
  * @param {number} [activePage]
  * @param {number | ChartLayoutProfile} [spanOrProfile]
- * @returns {{ firstPage: number, pageSpan: number, visiblePages: ChartPage[] }}
+ * @returns {ReadingSpread}
  */
 export function composePageSpread(pages, activePage = 1, spanOrProfile = 1) {
   const safePages = Array.isArray(pages) ? pages : [];
@@ -151,9 +232,7 @@ export function composePageSpread(pages, activePage = 1, spanOrProfile = 1) {
     ? spanOrProfile.pageSpan
     : spanOrProfile;
   const span = Math.min(2, positiveInteger(rawSpan, 1));
-  const total = Math.max(1, safePages.length);
-  const active = Math.min(total, positiveInteger(activePage, 1));
-  const firstPage = Math.floor((active - 1) / span) * span + 1;
+  const firstPage = normalizeSpreadPage(activePage, safePages.length, span);
   return {
     firstPage,
     pageSpan: span,
