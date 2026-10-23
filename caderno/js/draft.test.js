@@ -30,7 +30,8 @@ import {
   dismissRepeatCandidate,
 } from "./draft.js";
 import { parseCifraSource } from "./source.js";
-import { ALL_SIX_FIXTURES } from "./fixtures/cifras.js";
+import { ALL_SIX_FIXTURES, longRepeatedChart } from "./fixtures/cifras.js";
+import { getChartPageCount } from "./chart-pages.js";
 
 test("suggestChart: timeSignature vazio por padrão gera aviso NO_TIME_SIGNATURE", () => {
   const source = parseCifraSource(`Tom: C
@@ -655,4 +656,55 @@ test("dismissRepeatCandidate: oculta sugestão ('Manter completo') mantendo comp
   const undone = undoDraftHistoryState(history, draft);
   assert.equal(undone.undone, true);
   assert.equal(detectRepeatCandidates(undone.draft).length, 1);
+});
+
+test("fase 21 (longRepeatedChart): expansão da cifra compactada equivale à sequência original e reduz páginas sem omitir conteúdo", () => {
+  const source = parseCifraSource(longRepeatedChart);
+  let draft = suggestChart(source, { timeSignature: "4/4" });
+  const uncompactedSong = convertDraftToSong(draft);
+
+  const candidates = detectRepeatCandidates(draft);
+  assert.ok(candidates.length >= 3, "longRepeatedChart deve ter múltiplos candidatos de repetição");
+
+  for (const cand of candidates) {
+    draft = applyRepeatCompaction(draft, cand.id);
+  }
+  assert.equal(verifyDraftInvariants(draft, source).valid, true);
+
+  const compactedSong = convertDraftToSong(draft);
+  const expandSongMeasures = (song) => {
+    const out = [];
+    for (const sec of song.sections) {
+      let repeatStartIdx = -1;
+      for (let i = 0; i < sec.measures.length; i += 1) {
+        const m = sec.measures[i];
+        if (m.repeat === "start" || m.repeat === "both") {
+          repeatStartIdx = i;
+        }
+        out.push(`${sec.label}:${m.chords}`);
+        if (m.repeat === "end" || m.repeat === "both") {
+          const from = repeatStartIdx >= 0 ? repeatStartIdx : i;
+          for (let j = from; j <= i; j += 1) {
+            out.push(`${sec.label}:${sec.measures[j].chords}`);
+          }
+          repeatStartIdx = -1;
+        }
+      }
+    }
+    return out;
+  };
+
+  assert.deepEqual(
+    expandSongMeasures(compactedSong),
+    expandSongMeasures(uncompactedSong),
+    "A execução expandida da cifra compactada deve ser 100% idêntica à cifra por extenso"
+  );
+
+  const uncompactedMeasures = uncompactedSong.sections.reduce((acc, s) => acc + s.measures.length, 0);
+  const compactedMeasures = compactedSong.sections.reduce((acc, s) => acc + s.measures.length, 0);
+  assert.ok(compactedMeasures < uncompactedMeasures, "Compactação deve reduzir compassos escritos");
+
+  const uncompactedPages = getChartPageCount(uncompactedSong, { maxUnitsPerPage: 10 });
+  const compactedPages = getChartPageCount(compactedSong, { maxUnitsPerPage: 10 });
+  assert.ok(compactedPages < uncompactedPages, "Compactação deve aumentar a densidade por página");
 });
