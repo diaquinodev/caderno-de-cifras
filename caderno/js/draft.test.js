@@ -19,6 +19,9 @@ import {
   undoDraftHistoryState,
   convertDraftToSong,
   validateDraftForConfirmation,
+  getMeasureRepeatSignature,
+  detectSectionRepeatCandidates,
+  detectRepeatCandidates,
 } from "./draft.js";
 import { parseCifraSource } from "./source.js";
 import { ALL_SIX_FIXTURES } from "./fixtures/cifras.js";
@@ -458,4 +461,102 @@ test("validateDraftForConfirmation: aceita rascunho com fórmula de compasso e t
   const res = validateDraftForConfirmation(updated);
   assert.equal(res.valid, true);
   assert.equal(res.errors.length, 0);
+});
+
+test("detectRepeatCandidates: detecta bloco consecutivo 2x com >= 2 compassos e preserva rascunho intacto", () => {
+  const source = parseCifraSource(`Tom: C
+[A]
+| Cmaj7 | Dm7 G7 | Em7 A7 | Dm7 G7 |
+| Cmaj7 | Dm7 G7 | Em7 A7 | Dm7 G7 |`);
+  const draft = suggestChart(source, { timeSignature: "4/4" });
+  const beforeJson = JSON.stringify(draft);
+
+  const candidates = detectRepeatCandidates(draft);
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0].sectionId, draft.sections[0].id);
+  assert.equal(candidates[0].sectionLabel, "A");
+  assert.equal(candidates[0].times, 2);
+  assert.equal(candidates[0].savedMeasures, 4);
+  assert.equal(candidates[0].startMeasureNumber, 1);
+  assert.equal(candidates[0].endMeasureNumber, 8);
+  assert.equal(candidates[0].firstMeasureIds.length, 4);
+  assert.equal(candidates[0].repeatedMeasureIds.length, 4);
+  assert.deepEqual(candidates[0].chordsPreview, ["Cmaj7", "Dm7 G7", "Em7 A7", "Dm7 G7"]);
+  assert.match(candidates[0].summary, /Compassos 1–4 repetem em 5–8/);
+
+  // Imutabilidade
+  assert.equal(JSON.stringify(draft), beforeJson);
+  assert.equal(verifyDraftInvariants(draft, source).valid, true);
+});
+
+test("detectRepeatCandidates: rejeita diferença de acorde, vamp de 1 acorde isolado e 3+ ocorrências consecutivas", () => {
+  // Diferença de acorde no último compasso
+  const diffDraft = suggestChart(
+    parseCifraSource(`Tom: C\n[A]\n| Cmaj7 | Dm7 G7 | Cmaj7 | Dm7 G7b9 |`),
+    { timeSignature: "4/4" }
+  );
+  assert.equal(detectRepeatCandidates(diffDraft).length, 0);
+
+  // Vamp de 1 acorde isolado repetido (| C | C | C | C |)
+  const vampDraft = suggestChart(
+    parseCifraSource(`Tom: C\n[A]\n| Cmaj7 | Cmaj7 | Cmaj7 | Cmaj7 |`),
+    { timeSignature: "4/4" }
+  );
+  assert.equal(detectRepeatCandidates(vampDraft).length, 0);
+
+  // 3 ocorrências consecutivas (A B | A B | A B) -> não pode ser compactado como 2x ambíguo
+  const tripleDraft = suggestChart(
+    parseCifraSource(`Tom: C\n[A]\n| Cmaj7 | Dm7 G7 | Cmaj7 | Dm7 G7 | Cmaj7 | Dm7 G7 |`),
+    { timeSignature: "4/4" }
+  );
+  assert.equal(detectRepeatCandidates(tripleDraft).length, 0);
+});
+
+test("detectRepeatCandidates: escolhe candidato maximal não sobreposto e respeita barreiras estruturais", () => {
+  // Seção com 2 candidatos disjuntos: 2 compassos repetidos + ponte + 2 compassos repetidos
+  const multiDraft = suggestChart(
+    parseCifraSource(`Tom: C
+[A]
+| Cmaj7 | Dm7 G7 | Cmaj7 | Dm7 G7 | Fmaj7 | Fm6 | Em7 | A7 | Em7 | A7 |`),
+    { timeSignature: "4/4" }
+  );
+  const multiCands = detectRepeatCandidates(multiDraft);
+  assert.equal(multiCands.length, 2);
+  assert.equal(multiCands[0].startMeasureNumber, 1);
+  assert.equal(multiCands[0].endMeasureNumber, 4);
+  assert.equal(multiCands[1].startMeasureNumber, 7);
+  assert.equal(multiCands[1].endMeasureNumber, 10);
+
+  // Barreira estrutural: compasso já com repeat ou ending não entra em candidato
+  const withRepeatDraft = suggestChart(
+    parseCifraSource(`Tom: C\n[A]\n| Cmaj7 | Dm7 G7 | Cmaj7 | Dm7 G7 |`),
+    { timeSignature: "4/4" }
+  );
+  withRepeatDraft.sections[0].measures[0].repeat = "start";
+  assert.equal(getMeasureRepeatSignature(withRepeatDraft.sections[0].measures[0]), null);
+  assert.equal(detectSectionRepeatCandidates(withRepeatDraft.sections[0]).length, 0);
+
+  // Fronteira entre seções: nunca cruza de [A] para [B]
+  const crossSectionDraft = suggestChart(
+    parseCifraSource(`Tom: C\n[A]\n| Cmaj7 | Dm7 G7 |\n[B]\n| Cmaj7 | Dm7 G7 |`),
+    { timeSignature: "4/4" }
+  );
+  assert.equal(detectRepeatCandidates(crossSectionDraft).length, 0);
+});
+
+test("detectRepeatCandidates: roda com segurança sobre as 6 fixtures reais higienizadas sem mutar o rascunho", () => {
+  for (const fixture of ALL_SIX_FIXTURES) {
+    const source = parseCifraSource(fixture.raw);
+    const draft = suggestChart(source, { timeSignature: "4/4" });
+    const snapshot = JSON.stringify(draft);
+    const candidates = detectRepeatCandidates(draft);
+    assert.ok(Array.isArray(candidates), `Fixture ${fixture.id} deve retornar array de candidatos`);
+    for (const cand of candidates) {
+      assert.equal(cand.times, 2);
+      assert.ok(cand.savedMeasures >= 2);
+      assert.equal(cand.firstMeasureIds.length, cand.savedMeasures);
+      assert.equal(cand.repeatedMeasureIds.length, cand.savedMeasures);
+    }
+    assert.equal(JSON.stringify(draft), snapshot, `Fixture ${fixture.id} não pode ser mutada pelo detector`);
+  }
 });
