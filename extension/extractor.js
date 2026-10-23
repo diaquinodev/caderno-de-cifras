@@ -37,7 +37,7 @@
  *   { ok: false, error: "NO_CHORDS" | "INVALID_CHORD" | "INVALID_TAB", message: string }} ClipperExtractionResult
  */
 
-const CHORD_PATTERN = /^[A-G](?:#|b)?(?:(?:maj|min|dim|aug|sus|add|m|M)|\d|[°ºøØ+()#b-])*(?:\/[A-G](?:#|b)?)?$/;
+const CHORD_PATTERN = /^[A-G](?:#|b)?(?:(?:maj|min|dim|aug|sus|add|m|M)|\d|[°ºøØ+()#b-]|\/(?=\d))*(?:\/[A-G](?:#|b)?)?$/;
 const TAB_PATTERN = /^(?:[eBGDAE]\s*\|[-0-9/\\pbhr~s\s|]+|\|[-0-9/\\pbhr~s\s|]{7,}\|)$/i;
 
 function inline(value) {

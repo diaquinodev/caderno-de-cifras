@@ -47,7 +47,7 @@ import { uid } from "./store.js";
  * @property {SourceExclusion[]} exclusions
  */
 
-const CHORD_REST = /^(?:maj|min|dim|aug|sus|add|m|M|b|#|\d|°|º|ø|Ø|\+|-|\(|\))*$/i;
+const CHORD_REST = /^(?:maj|min|dim|aug|sus|add|m|M|b|#|\d|°|º|ø|Ø|\+|-|\(|\)|\/(?=\d))*$/i;
 
 /**
  * Evaluates whether a token represents a musical chord.

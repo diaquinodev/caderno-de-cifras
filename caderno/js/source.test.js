@@ -35,6 +35,14 @@ test("evaluateChordToken identifica acordes validos e rejeita tokens invalidos c
   assert.equal(slash.chord.raw, "Bb/D");
   assert.equal(slash.chord.normalized, "Bb/D");
 
+  const numericSlash = evaluateChordToken("E7(4/9)");
+  assert.ok(numericSlash.chord);
+  assert.equal(numericSlash.chord.raw, "E7(4/9)");
+
+  const numericSlashWithBass = evaluateChordToken("G7(9/11)/B");
+  assert.ok(numericSlashWithBass.chord);
+  assert.equal(numericSlashWithBass.chord.raw, "G7(9/11)/B");
+
   const word = evaluateChordToken("Amor");
   assert.equal(word.chord, null);
   assert.ok(word.reason);
@@ -42,6 +50,9 @@ test("evaluateChordToken identifica acordes validos e rejeita tokens invalidos c
   const invalidSlash = evaluateChordToken("C/X");
   assert.equal(invalidSlash.chord, null);
   assert.ok(invalidSlash.reason);
+
+  assert.equal(evaluateChordToken("C//G").chord, null);
+  assert.equal(evaluateChordToken("E7(4/x)").chord, null);
 });
 
 test("isTabLine identifica linhas de tablatura de guitarra sem confundir com acordes", () => {

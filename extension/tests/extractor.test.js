@@ -77,6 +77,26 @@ test("seção e tom ausentes geram bloco anônimo sem inventar metadados", () =>
   assert.deepEqual(source.allChords.map((chord) => chord.raw), ["C/G", "F#7(9)"]);
 });
 
+test("alterações numéricas separadas por barra preservam acordes compostos e inversões", () => {
+  const extracted = extractCanonicalCifra({
+    metadata: { title: "Extensões numéricas", artist: "Artista" },
+    blocks: [
+      {
+        label: "Intro",
+        kind: "section",
+        lines: [{ type: "chords", chords: ["E7(4/9)", "G7(9/11)/B"] }],
+      },
+    ],
+  });
+
+  assert.equal(extracted.ok, true);
+  if (!extracted.ok) return;
+
+  const source = parseCifraSource(extracted.text, { sourceFormat: "plain" });
+  assert.deepEqual(source.allChords.map((chord) => chord.raw), ["E7(4/9)", "G7(9/11)/B"]);
+  assert.equal(extracted.chordCount, 2);
+});
+
 test("texto desconhecido e metadados multilinha não deixam letra atravessar o extrator", () => {
   const snapshot = /** @type {any} */ ({
     metadata: {
