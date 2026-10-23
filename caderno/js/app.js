@@ -1347,6 +1347,7 @@ function paintPaper(focusId) {
     spreadHost.className = `reading-spread ${spread.pageSpan === 2 ? "is-double" : "is-single"}${spread.pageSpan === 2 && spread.visiblePages.length < 2 ? " is-incomplete" : ""}`;
     spreadHost.dataset.pageSpan = String(spread.pageSpan);
     spreadHost.dataset.firstPage = String(spread.firstPage);
+    spreadHost.dataset.totalPages = String(totalPages);
     spreadHost.dataset.visiblePages = spread.visiblePages.map((p) => p.index).join(",");
     spreadHost.dataset.minSheetWidth = String(profile.minSheetWidth || 420);
     spreadHost.style.setProperty("--sheet-target-width", `${profile.usableSheetWidth}px`);

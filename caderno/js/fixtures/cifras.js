@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Sanitized test fixtures for the six real-world songs in the Caderno corpus.
  * These fixtures contain chord progressions, section headers, and tablature annotations
  * without storing protected copyrighted lyrics.
@@ -127,3 +127,47 @@ export const ALL_SIX_FIXTURES = [
   { id: "garota-de-ipanema", name: "Garota de Ipanema", raw: FIXTURE_GAROTA_DE_IPANEMA, expectedBlocks: 3, hasTabs: false },
   { id: "samba-de-uma-nota-so", name: "Samba de Uma Nota Só", raw: FIXTURE_SAMBA_DE_UMA_NOTA_SO, expectedBlocks: 3, hasTabs: true },
 ];
+
+/**
+ * Fixture sintética longa com progressões repetidas e múltiplas seções (Fase 21)
+ * para provar que compactação de repetições + paginação de cifras aumentam a densidade
+ * legível da música sem esconder conteúdo ou alterar sua sequência canônica.
+ */
+export const longRepeatedChart = `
+Título: Suíte da Leitura Paginada
+Artista: Conjunto Instrumental do Caderno
+Compositor: Arranjador do Caderno
+Tom: C
+
+[Intro]
+| Cmaj7 | Dm7 G7 | Em7 A7 | Dm7 G7 |
+| Cmaj7 | Dm7 G7 | Em7 A7 | Dm7 G7 |
+
+[Parte A]
+| Cmaj7 | A7 | Dm7 | G7 |
+| Em7 | A7 | Dm7 | G7 |
+| Cmaj7 | A7 | Dm7 | G7 |
+| Em7 | A7 | Dm7 | G7 |
+
+[Ponte]
+| Fmaj7 | Fm6 | Em7 | A7 |
+| Dm7 | D7 | G7sus4 | G7 |
+| Fmaj7 | Fm6 | Em7 | A7 |
+| Dm7 | G7 | C6 | G7 |
+
+[Parte B]
+| Am7 | D7 | Gmaj7 | Cmaj7 |
+| F#m7b5 | B7 | Em7 | E7 |
+| Am7 | D7 | Gmaj7 | Cmaj7 |
+| F#m7b5 | B7 | Em7 | G7 |
+
+[Interlúdio]
+| Gm7 | C7 | Fmaj7 | Bb7 |
+| Em7b5 | A7 | Dm7 | G7 |
+| Gm7 | C7 | Fmaj7 | Bb7 |
+| Em7b5 | A7 | Dm7 | G7 |
+
+[Coda]
+| Cmaj7 | Fmaj7 | Em7 A7 | Dm7 G7 |
+| Cmaj7 | Fmaj7 | Dm7 G7 | C6 |
+`.trim();
