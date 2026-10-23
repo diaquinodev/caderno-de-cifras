@@ -1318,4 +1318,131 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     const appErrors = errors.filter((err) => !err.includes("ERR_INTERNET_DISCONNECTED"));
     expect(appErrors, "Nenhum erro inesperado da aplicação no console").toEqual([]);
   });
+
+  test("fase 16: leitura paginada de cifra HTML longa (Página X de Y, teclado, toque e ordem página->música)", async ({ page }) => {
+    const makeMeasures = (prefix, count) =>
+      Array.from({ length: count }, (_, idx) => ({
+        id: `${prefix}-${idx + 1}`,
+        chords: idx === 0 ? `${prefix}1` : "C7M",
+        ending: "",
+        repeat: "",
+      }));
+
+    const pagedLibrary = {
+      version: 2,
+      pdfDocuments: [],
+      songs: [
+        {
+          id: "song-long-16",
+          title: "Suíte Longa 16 Linhas",
+          composer: "Mestre Harmônico",
+          style: "Samba",
+          key: "C",
+          tempo: 120,
+          timeSignature: "4/4",
+          barsPerRow: 4,
+          sections: [
+            { id: "sec-a", label: "Parte A", measures: makeMeasures("A", 32) },
+            { id: "sec-b", label: "Parte B", measures: makeMeasures("B", 32) },
+          ],
+        },
+        {
+          id: "song-next-short",
+          title: "Tema Final Curto",
+          composer: "Autor B",
+          style: "Bossa",
+          key: "G",
+          tempo: 110,
+          timeSignature: "4/4",
+          barsPerRow: 4,
+          sections: [{ id: "sec-c", label: "A", measures: [{ id: "c-1", chords: "G7M" }] }],
+        },
+      ],
+      playlists: [],
+      setlists: [
+        {
+          id: "setlist-paged",
+          name: "Show Paginado",
+          items: [{ songId: "song-long-16" }, { songId: "song-next-short" }],
+        },
+      ],
+    };
+
+    const errors = await setupPage(page, { library: pagedLibrary, seedPdf: false });
+    await page.setViewportSize({ width: 1024, height: 768 });
+
+    // 1. Modo limpo em música individual (#/musicas/song-long-16)
+    await gotoRoute(page, "#/musicas/song-long-16");
+    await expect(page.locator("#paper-body .staff-line")).toHaveCount(16);
+
+    await page.click('[data-action="toggle-clean"]');
+    await expect(page.locator("#sidebar")).not.toBeVisible();
+    await expect(page.locator(".sheet-tools")).not.toBeVisible();
+
+    const indicator = page.locator("#chart-page-indicator");
+    await expect(indicator).toContainText("Página 1 de 2");
+    await expect(page.locator("#paper-body .staff-line")).toHaveCount(8);
+    await expect(page.locator("#paper-body").getByText("A1")).toBeVisible();
+
+    // Verifica que todas as 8 linhas musicais cabem sem corte e sem rolagem horizontal
+    const layoutMetrics = await page.evaluate(() => {
+      const lines = [...document.querySelectorAll("#paper-body .staff-line")];
+      const rects = lines.map((el) => el.getBoundingClientRect());
+      const buttons = [...document.querySelectorAll(".chart-reading-bar .btn")].map((el) => {
+        const r = el.getBoundingClientRect();
+        return { w: r.width, h: r.height };
+      });
+      return {
+        overflowX: document.documentElement.scrollWidth - window.innerWidth,
+        allLinesVisible: rects.every((r) => r.top >= 0 && r.bottom <= window.innerHeight && r.height >= 24),
+        minBtnW: Math.min(...buttons.map((b) => b.w)),
+        minBtnH: Math.min(...buttons.map((b) => b.h)),
+      };
+    });
+    expect(layoutMetrics.overflowX).toBeLessThanOrEqual(0);
+    expect(layoutMetrics.allLinesVisible).toBe(true);
+    expect(layoutMetrics.minBtnW).toBeGreaterThanOrEqual(44);
+    expect(layoutMetrics.minBtnH).toBeGreaterThanOrEqual(44);
+
+    // 2. Navegação por teclado (ArrowRight / ArrowLeft) e toque (.tap-zone) no modo limpo
+    await page.keyboard.press("ArrowRight");
+    await expect(indicator).toContainText("Página 2 de 2");
+    await expect(page.locator("#paper-body .staff-line")).toHaveCount(8);
+    await expect(page.locator("#paper-body").getByText("B1")).toBeVisible();
+
+    await page.click(".tap-zone.prev");
+    await expect(indicator).toContainText("Página 1 de 2");
+    await expect(page.locator("#paper-body").getByText("A1")).toBeVisible();
+
+    // Sai do modo limpo de volta à edição
+    await page.click('.chart-reading-bar [data-action="toggle-clean"]');
+    await expect(page.locator(".sheet-tools")).toBeVisible();
+    await expect(page.locator("#paper-body .staff-line")).toHaveCount(16);
+
+    // 3. Modo palco (#/setlists/setlist-paged/palco): ordem página -> música e recuo para a última página
+    await gotoRoute(page, "#/setlists/setlist-paged/palco");
+    await expect(page.locator("#stage-picker")).toHaveValue("0");
+    await expect(indicator).toContainText("Página 1 de 2");
+    await expect(page.locator('[data-action="stage-prev"]')).toBeDisabled();
+
+    // Avança para Página 2 de 2 da mesma música
+    await page.click('[data-action="stage-next"]');
+    await expect(page.locator("#stage-picker")).toHaveValue("0");
+    await expect(indicator).toContainText("Página 2 de 2");
+    await expect(page.locator("#paper-body").getByText("B1")).toBeVisible();
+
+    // Avança na última página -> entra na Música 2 (Página 1 de 1)
+    await page.click('[data-action="stage-next"]');
+    await expect(page.locator("#stage-picker")).toHaveValue("1");
+    await expect(page.locator("h1.sheet-title")).toHaveText("Tema Final Curto");
+    await expect(indicator).toContainText("Página 1 de 1");
+
+    // Recua da Música 2 -> volta para a Página 2 de 2 da Música 1
+    await page.click('[data-action="stage-prev"]');
+    await expect(page.locator("#stage-picker")).toHaveValue("0");
+    await expect(indicator).toContainText("Página 2 de 2");
+    await expect(page.locator("#paper-body").getByText("B1")).toBeVisible();
+
+    expect(errors).toEqual([]);
+  });
 });

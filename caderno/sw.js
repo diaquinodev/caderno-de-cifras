@@ -1,12 +1,13 @@
-const CACHE_NAME = "caderno-v3";
+const CACHE_NAME = "caderno-v4";
 
 const PRECACHE_ASSETS = [
   "./",
   "./index.html",
-  "./css/app.css?v=5",
-  "./js/app.js?v=6",
+  "./css/app.css?v=6",
+  "./js/app.js?v=7",
   "./js/acervo.js",
   "./js/backup.js",
+  "./js/chart-pages.js",
   "./js/chords.js",
   "./js/cifra.js",
   "./js/draft.js",
@@ -19,6 +20,7 @@ const PRECACHE_ASSETS = [
   "./js/performance.js",
   "./js/source.js",
   "./js/split.js",
+  "./js/store.js",
   "./manifest.webmanifest",
   "./icon.svg",
   "./icon-192.png",
