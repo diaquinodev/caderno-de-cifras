@@ -330,6 +330,44 @@ test("getSongPageCount calcula paginas utilizaveis para cifras e partituras", ()
   assert.equal(getSongPageCount({}), 1);
   assert.equal(getSongPageCount({ pdfRef: { documentId: "doc-1", firstPage: 7, lastPage: 8 } }), 2);
   assert.equal(getSongPageCount({ pdfPages: 4 }), 4);
+  assert.equal(getSongPageCount({ id: "chart" }, { chartPageCount: () => 3 }), 3);
+  assert.equal(getSongPageCount({ id: "chart" }, { chartPageCount: () => 0 }), 1);
+  assert.equal(getSongPageCount({ id: "chart" }, { chartPageCount: () => Number.NaN }), 1);
+  assert.equal(getSongPageCount({ id: "chart" }, { chartPageCount: () => Number.POSITIVE_INFINITY }), 1);
+  assert.equal(getSongPageCount({ id: "chart" }, { chartPageCount: () => 2.9 }), 2);
+  assert.equal(getSongPageCount({ pdfRef: { documentId: "doc-1", firstPage: 1, lastPage: 2 } }, { chartPageCount: () => 9 }), 2);
+});
+
+test("getSongPageCount escolhe explicitamente cifra ou PDF em música híbrida", () => {
+  const hybrid = { id: "hybrid", pdfRef: { documentId: "doc-1", firstPage: 1, lastPage: 6 } };
+  const chartPageCount = () => 3;
+
+  assert.equal(getSongPageCount(hybrid, { representation: "auto", chartPageCount }), 6);
+  assert.equal(getSongPageCount(hybrid, { representation: "pdf", chartPageCount }), 6);
+  assert.equal(getSongPageCount(hybrid, { representation: "chart", chartPageCount }), 3);
+});
+
+test("stepPerformancePosition usa contador runtime para paginas de cifra", () => {
+  const library = {
+    songs: [
+      { id: "chart-long" },
+      { id: "chart-short" },
+    ],
+  };
+  const items = [{ songId: "chart-long" }, { songId: "chart-short" }];
+  const chartPageCount = (entry) => entry.id === "chart-long" ? 3 : 1;
+
+  const page2 = stepPerformancePosition({ itemIndex: 0, page: 1 }, 1, { items, library, chartPageCount });
+  const page3 = stepPerformancePosition(page2, 1, { items, library, chartPageCount });
+  const nextSong = stepPerformancePosition(page3, 1, { items, library, chartPageCount });
+  const backToLastPage = stepPerformancePosition(nextSong, -1, { items, library, chartPageCount });
+
+  assert.equal(canStepPerformance({ itemIndex: 0, page: 1 }, 1, { items, library, chartPageCount }), true);
+  assert.deepEqual(page2, { itemIndex: 0, page: 2, changedSong: false, reachedBoundary: false });
+  assert.deepEqual(page3, { itemIndex: 0, page: 3, changedSong: false, reachedBoundary: false });
+  assert.deepEqual(nextSong, { itemIndex: 1, page: 1, changedSong: true, reachedBoundary: false });
+  assert.deepEqual(backToLastPage, { itemIndex: 0, page: 3, changedSong: true, reachedBoundary: false });
+  assert.equal(canStepPerformance({ itemIndex: 1, page: 1 }, 1, { items, library, chartPageCount }), false);
 });
 
 test("stepPerformancePosition navega paginas e musicas na setlist com retorno para a ultima pagina", () => {
