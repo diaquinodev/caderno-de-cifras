@@ -51,6 +51,8 @@ import { uid, blankSong } from "./store.js";
  * @property {DraftWarning[]} warnings
  * @property {SourceExclusion[]} exclusions
  * @property {CifraSource} sourceSnapshot
+ * @property {RepeatCompaction[]} [repeatCompactions]
+ * @property {string[]} [dismissedRepeatCandidateIds]
  */
 
 /**
@@ -81,6 +83,15 @@ import { uid, blankSong } from "./store.js";
  * @property {number} endMeasureNumber
  * @property {string[]} chordsPreview
  * @property {string} summary
+ */
+
+/**
+ * @typedef {Object} RepeatCompaction
+ * @property {string} id
+ * @property {string} sectionId
+ * @property {string[]} keptMeasureIds
+ * @property {string[]} hiddenMeasureIds
+ * @property {number} times
  */
 
 /**
@@ -395,6 +406,8 @@ export function suggestChart(sourceInput, options = {}) {
     warnings,
     exclusions: [...(source.exclusions || [])],
     sourceSnapshot: source,
+    repeatCompactions: [],
+    dismissedRepeatCandidateIds: [],
   };
 
   return syncDraftMeasureWarnings(draft);
@@ -493,6 +506,7 @@ export function updateDraftTimeSignature(draft, newTimeSig) {
  * @returns {ImportDraft}
  */
 export function splitMeasure(draft, sectionId, measureId, splitIndex = 1) {
+  if (isSectionCompacted(draft, sectionId)) return draft;
   const sections = draft.sections.map((sec) => {
     if (sec.id !== sectionId) return sec;
     const measureIndex = sec.measures.findIndex((m) => m.id === measureId);
@@ -569,6 +583,7 @@ export function splitMeasureAtChord(draft, sectionId, measureId, chordIndex = 1)
  */
 export function canMoveChordBetweenMeasures(draft, sectionId, measureId, chordIndex, direction) {
   if (!draft || !Array.isArray(draft.sections)) return false;
+  if (isSectionCompacted(draft, sectionId)) return false;
   if (direction !== -1 && direction !== 1) return false;
 
   const sec = draft.sections.find((s) => s.id === sectionId);
@@ -677,6 +692,7 @@ export function moveChordBetweenMeasures(draft, sectionId, measureId, chordIndex
  * @returns {ImportDraft}
  */
 export function mergeMeasures(draft, sectionId, measureId1, measureId2) {
+  if (isSectionCompacted(draft, sectionId)) return draft;
   const sections = draft.sections.map((sec) => {
     if (sec.id !== sectionId) return sec;
 
@@ -733,6 +749,9 @@ export function mergeMeasures(draft, sectionId, measureId1, measureId2) {
  * @returns {ImportDraft}
  */
 export function moveMeasure(draft, sourceSectionId, measureId, targetSectionId, targetIndex) {
+  if (isSectionCompacted(draft, sourceSectionId) || isSectionCompacted(draft, targetSectionId)) {
+    return draft;
+  }
   let movedMeasure = null;
 
   const sectionsWithoutMeasure = draft.sections.map((sec) => {
@@ -773,6 +792,7 @@ export function moveMeasure(draft, sourceSectionId, measureId, targetSectionId, 
  * @returns {ImportDraft}
  */
 export function splitSection(draft, sectionId, atMeasureIndex, newLabel = "B") {
+  if (isSectionCompacted(draft, sectionId)) return draft;
   const sectionIdx = draft.sections.findIndex((s) => s.id === sectionId);
   if (sectionIdx === -1) return draft;
 
@@ -806,6 +826,9 @@ export function splitSection(draft, sectionId, atMeasureIndex, newLabel = "B") {
  * @returns {ImportDraft}
  */
 export function mergeSections(draft, sectionId1, sectionId2) {
+  if (isSectionCompacted(draft, sectionId1) || isSectionCompacted(draft, sectionId2)) {
+    return draft;
+  }
   const idx1 = draft.sections.findIndex((s) => s.id === sectionId1);
   const idx2 = draft.sections.findIndex((s) => s.id === sectionId2);
   if (idx1 === -1 || idx2 === -1) return draft;
@@ -853,6 +876,16 @@ export function cloneDraftState(draft) {
       : [],
     warnings: Array.isArray(draft.warnings) ? draft.warnings.map((w) => ({ ...w })) : [],
     exclusions: Array.isArray(draft.exclusions) ? draft.exclusions.map((e) => ({ ...e })) : [],
+    repeatCompactions: Array.isArray(draft.repeatCompactions)
+      ? draft.repeatCompactions.map((c) => ({
+          ...c,
+          keptMeasureIds: Array.isArray(c.keptMeasureIds) ? [...c.keptMeasureIds] : [],
+          hiddenMeasureIds: Array.isArray(c.hiddenMeasureIds) ? [...c.hiddenMeasureIds] : [],
+        }))
+      : [],
+    dismissedRepeatCandidateIds: Array.isArray(draft.dismissedRepeatCandidateIds)
+      ? [...draft.dismissedRepeatCandidateIds]
+      : [],
     sourceSnapshot: draft.sourceSnapshot,
   };
 }
@@ -936,18 +969,39 @@ export function convertDraftToSong(draft) {
     .join("\n\n");
 
   const chordSections = draft.sections.filter((s) => s.kind === "chords" || s.measures.length > 0);
+  const compactions = Array.isArray(draft.repeatCompactions) ? draft.repeatCompactions : [];
 
   const finalSections = chordSections.length > 0
-    ? chordSections.map((s) => ({
-        id: uid(),
-        label: s.label || "A",
-        measures: s.measures.map((m) => ({
+    ? chordSections.map((s) => {
+        const secCompactions = compactions.filter((c) => c && c.sectionId === s.id);
+        const hiddenIds = new Set(secCompactions.flatMap((c) => c.hiddenMeasureIds || []));
+        const startIds = new Set(secCompactions.map((c) => c.keptMeasureIds?.[0]).filter(Boolean));
+        const endIds = new Set(secCompactions.map((c) => c.keptMeasureIds?.at(-1)).filter(Boolean));
+
+        const visibleMeasures = s.measures.filter((m) => !hiddenIds.has(m.id));
+        return {
           id: uid(),
-          chords: m.chords || "",
-          repeat: m.repeat || "",
-          ending: m.ending || "",
-        })),
-      }))
+          label: s.label || "A",
+          measures: visibleMeasures.map((m) => {
+            let repeat = m.repeat || "";
+            const isStart = startIds.has(m.id);
+            const isEnd = endIds.has(m.id);
+            if (isStart && isEnd) {
+              repeat = "both";
+            } else if (isStart) {
+              repeat = repeat === "end" || repeat === "both" ? "both" : "start";
+            } else if (isEnd) {
+              repeat = repeat === "start" || repeat === "both" ? "both" : "end";
+            }
+            return {
+              id: uid(),
+              chords: m.chords || "",
+              repeat,
+              ending: m.ending || "",
+            };
+          }),
+        };
+      })
     : base.sections;
 
   return {
@@ -1150,9 +1204,10 @@ export function detectSectionRepeatCandidates(section, excludedMeasureIds = new 
  */
 export function detectRepeatCandidates(draft) {
   if (!draft || !Array.isArray(draft.sections)) return [];
-  const compactions = Array.isArray(/** @type {any} */ (draft).repeatCompactions)
-    ? /** @type {any} */ (draft).repeatCompactions
-    : [];
+  const compactions = Array.isArray(draft.repeatCompactions) ? draft.repeatCompactions : [];
+  const dismissedIds = new Set(
+    Array.isArray(draft.dismissedRepeatCandidateIds) ? draft.dismissedRepeatCandidateIds : []
+  );
   const compactedSectionIds = new Set(compactions.map((c) => c.sectionId));
   const excludedMeasureIds = new Set(
     compactions.flatMap((c) => [...(c.keptMeasureIds || []), ...(c.hiddenMeasureIds || [])])
@@ -1161,9 +1216,158 @@ export function detectRepeatCandidates(draft) {
   const candidates = [];
   for (const section of draft.sections) {
     if (compactedSectionIds.has(section.id)) continue;
-    candidates.push(...detectSectionRepeatCandidates(section, excludedMeasureIds));
+    const secCandidates = detectSectionRepeatCandidates(section, excludedMeasureIds);
+    for (const cand of secCandidates) {
+      if (!dismissedIds.has(cand.id)) {
+        candidates.push(cand);
+      }
+    }
   }
   return candidates;
 }
 
 export const findConsecutiveRepeatCandidates = detectRepeatCandidates;
+
+/**
+ * Verifica se uma seção possui ao menos uma compactação ativa de repetição.
+ *
+ * @param {ImportDraft} draft
+ * @param {string} sectionId
+ * @returns {boolean}
+ */
+export function isSectionCompacted(draft, sectionId) {
+  if (!draft || !Array.isArray(draft.repeatCompactions)) return false;
+  return draft.repeatCompactions.some((c) => c && c.sectionId === sectionId);
+}
+
+/**
+ * Retorna a lista de compactações ativas pertencentes a uma seção.
+ *
+ * @param {ImportDraft} draft
+ * @param {string} sectionId
+ * @returns {RepeatCompaction[]}
+ */
+export function getSectionRepeatCompactions(draft, sectionId) {
+  if (!draft || !Array.isArray(draft.repeatCompactions)) return [];
+  return draft.repeatCompactions.filter((c) => c && c.sectionId === sectionId);
+}
+
+/**
+ * Retorna os compassos visíveis de uma seção no editor de rascunho,
+ * ocultando os compassos da segunda ocorrência de compactações ativas e
+ * projetando `repeat` ("start"/"end"/"both") nos compassos mantidos.
+ *
+ * @param {ImportDraft} draft
+ * @param {DraftSection} section
+ * @returns {DraftMeasure[]}
+ */
+export function getVisibleSectionMeasures(draft, section) {
+  if (!section || !Array.isArray(section.measures)) return [];
+  const secCompactions = getSectionRepeatCompactions(draft, section.id);
+  if (secCompactions.length === 0) return section.measures;
+
+  const hiddenIds = new Set(secCompactions.flatMap((c) => c.hiddenMeasureIds || []));
+  const startIds = new Set(secCompactions.map((c) => c.keptMeasureIds?.[0]).filter(Boolean));
+  const endIds = new Set(secCompactions.map((c) => c.keptMeasureIds?.at(-1)).filter(Boolean));
+
+  return section.measures
+    .filter((m) => !hiddenIds.has(m.id))
+    .map((m) => {
+      let repeat = m.repeat || "";
+      const isStart = startIds.has(m.id);
+      const isEnd = endIds.has(m.id);
+      if (isStart && isEnd) {
+        repeat = "both";
+      } else if (isStart) {
+        repeat = repeat === "end" || repeat === "both" ? "both" : "start";
+      } else if (isEnd) {
+        repeat = repeat === "start" || repeat === "both" ? "both" : "end";
+      }
+      if (repeat === (m.repeat || "")) return m;
+      return {
+        ...m,
+        repeat,
+      };
+    });
+}
+
+/**
+ * Aplica uma compactação reversível a partir de um candidato de repetição válido.
+ * Preserva todos os compassos canônicos em `section.measures` e todos os invariantes de proveniência.
+ *
+ * @param {ImportDraft} draft
+ * @param {string | RepeatCandidate} candidateOrId
+ * @returns {ImportDraft}
+ */
+export function applyRepeatCompaction(draft, candidateOrId) {
+  if (!draft || !Array.isArray(draft.sections)) return draft;
+  const targetId = typeof candidateOrId === "string" ? candidateOrId : candidateOrId?.id;
+  if (!targetId) return draft;
+
+  const candidates = detectRepeatCandidates(draft);
+  const candidate = candidates.find((c) => c.id === targetId);
+  if (!candidate) return draft;
+
+  const existingCompactions = Array.isArray(draft.repeatCompactions) ? draft.repeatCompactions : [];
+  if (existingCompactions.some((c) => c.id === candidate.id || c.sectionId === candidate.sectionId)) {
+    return draft;
+  }
+
+  /** @type {RepeatCompaction} */
+  const compaction = {
+    id: candidate.id,
+    sectionId: candidate.sectionId,
+    keptMeasureIds: [...candidate.firstMeasureIds],
+    hiddenMeasureIds: [...candidate.repeatedMeasureIds],
+    times: candidate.times || 2,
+  };
+
+  return {
+    ...draft,
+    repeatCompactions: [...existingCompactions, compaction],
+  };
+}
+
+/**
+ * Expande uma compactação reversível (por id da compactação ou id da seção),
+ * restaurando a visualização literal completa da seção.
+ *
+ * @param {ImportDraft} draft
+ * @param {string} compactionOrSectionId
+ * @returns {ImportDraft}
+ */
+export function expandRepeatCompaction(draft, compactionOrSectionId) {
+  if (!draft || !Array.isArray(draft.repeatCompactions) || !compactionOrSectionId) {
+    return draft;
+  }
+  const nextCompactions = draft.repeatCompactions.filter(
+    (c) => c.id !== compactionOrSectionId && c.sectionId !== compactionOrSectionId
+  );
+  if (nextCompactions.length === draft.repeatCompactions.length) {
+    return draft;
+  }
+  return {
+    ...draft,
+    repeatCompactions: nextCompactions,
+  };
+}
+
+/**
+ * Registra que o usuário escolheu "Manter completo" para um candidato de repetição,
+ * ocultando a sugestão sem alterar os compassos da seção.
+ *
+ * @param {ImportDraft} draft
+ * @param {string} candidateId
+ * @returns {ImportDraft}
+ */
+export function dismissRepeatCandidate(draft, candidateId) {
+  if (!draft || !candidateId) return draft;
+  const existing = Array.isArray(draft.dismissedRepeatCandidateIds)
+    ? draft.dismissedRepeatCandidateIds
+    : [];
+  if (existing.includes(candidateId)) return draft;
+  return {
+    ...draft,
+    dismissedRepeatCandidateIds: [...existing, candidateId],
+  };
+}

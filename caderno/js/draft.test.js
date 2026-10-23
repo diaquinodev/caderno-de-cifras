@@ -22,6 +22,12 @@ import {
   getMeasureRepeatSignature,
   detectSectionRepeatCandidates,
   detectRepeatCandidates,
+  isSectionCompacted,
+  getSectionRepeatCompactions,
+  getVisibleSectionMeasures,
+  applyRepeatCompaction,
+  expandRepeatCompaction,
+  dismissRepeatCandidate,
 } from "./draft.js";
 import { parseCifraSource } from "./source.js";
 import { ALL_SIX_FIXTURES } from "./fixtures/cifras.js";
@@ -559,4 +565,94 @@ test("detectRepeatCandidates: roda com segurança sobre as 6 fixtures reais higi
     }
     assert.equal(JSON.stringify(draft), snapshot, `Fixture ${fixture.id} não pode ser mutada pelo detector`);
   }
+});
+
+test("compactação reversível: applyRepeatCompaction e expandRepeatCompaction preservam invariantes, integram com undo e bloqueiam edição estrutural até expandir", () => {
+  const source = parseCifraSource(`Tom: C
+[A]
+| Cmaj7 | Dm7 G7 | Em7 A7 | Dm7 G7 |
+| Cmaj7 | Dm7 G7 | Em7 A7 | Dm7 G7 |`);
+  let draft = suggestChart(source, { timeSignature: "4/4" });
+  let history = createDraftHistory();
+
+  const secId = draft.sections[0].id;
+  const candidates = detectRepeatCandidates(draft);
+  assert.equal(candidates.length, 1);
+
+  // Compactar como 2x
+  history = pushDraftHistoryState(history, draft);
+  draft = applyRepeatCompaction(draft, candidates[0].id);
+
+  assert.equal(isSectionCompacted(draft, secId), true);
+  assert.equal(getSectionRepeatCompactions(draft, secId).length, 1);
+  assert.equal(draft.sections[0].measures.length, 8, "Compassos canônicos permanecem intactos");
+  assert.equal(verifyDraftInvariants(draft, source).valid, true);
+
+  const visible = getVisibleSectionMeasures(draft, draft.sections[0]);
+  assert.equal(visible.length, 4);
+  assert.equal(visible[0].repeat, "start");
+  assert.equal(visible[1].repeat, "");
+  assert.equal(visible[2].repeat, "");
+  assert.equal(visible[3].repeat, "end");
+
+  // Operações estruturais devem ficar bloqueadas na seção compactada
+  const m0Id = draft.sections[0].measures[0].id;
+  const m1Id = draft.sections[0].measures[1].id;
+  assert.equal(splitMeasure(draft, secId, m1Id, 1), draft);
+  assert.equal(canMoveChordBetweenMeasures(draft, secId, m1Id, 0, -1), false);
+  assert.equal(mergeMeasures(draft, secId, m0Id, m1Id), draft);
+  assert.equal(splitSection(draft, secId, 2, "B"), draft);
+
+  // Conversão para Song emite apenas a primeira ocorrência com |: ... :|
+  const compactedSong = convertDraftToSong(draft);
+  assert.equal(compactedSong.sections[0].measures.length, 4);
+  assert.equal(compactedSong.sections[0].measures[0].repeat, "start");
+  assert.equal(compactedSong.sections[0].measures[3].repeat, "end");
+  assert.deepEqual(
+    compactedSong.sections[0].measures.map((m) => m.chords),
+    ["Cmaj7", "Dm7 G7", "Em7 A7", "Dm7 G7"]
+  );
+
+  // Expandir restaura os 8 compassos visíveis e desbloqueia edição
+  history = pushDraftHistoryState(history, draft);
+  draft = expandRepeatCompaction(draft, secId);
+  assert.equal(isSectionCompacted(draft, secId), false);
+  assert.equal(getVisibleSectionMeasures(draft, draft.sections[0]).length, 8);
+  assert.equal(verifyDraftInvariants(draft, source).valid, true);
+
+  // Undo volta para o estado compactado
+  const undoExpand = undoDraftHistoryState(history, draft);
+  assert.equal(undoExpand.undone, true);
+  draft = undoExpand.draft;
+  history = undoExpand.history;
+  assert.equal(isSectionCompacted(draft, secId), true);
+  assert.equal(getVisibleSectionMeasures(draft, draft.sections[0]).length, 4);
+
+  // Segundo undo volta para o estado inicial antes de compactar
+  const undoCompact = undoDraftHistoryState(history, draft);
+  assert.equal(undoCompact.undone, true);
+  draft = undoCompact.draft;
+  assert.equal(isSectionCompacted(draft, secId), false);
+  assert.equal(detectRepeatCandidates(draft).length, 1);
+  assert.equal(verifyDraftInvariants(draft, source).valid, true);
+});
+
+test("dismissRepeatCandidate: oculta sugestão ('Manter completo') mantendo compassos literais e suporta undo", () => {
+  const source = parseCifraSource(`Tom: C
+[A]
+| Cmaj7 | Dm7 G7 | Cmaj7 | Dm7 G7 |`);
+  let draft = suggestChart(source, { timeSignature: "4/4" });
+  let history = createDraftHistory();
+
+  const [cand] = detectRepeatCandidates(draft);
+  assert.ok(cand);
+
+  history = pushDraftHistoryState(history, draft);
+  draft = dismissRepeatCandidate(draft, cand.id);
+  assert.equal(detectRepeatCandidates(draft).length, 0);
+  assert.equal(getVisibleSectionMeasures(draft, draft.sections[0]).length, 4);
+
+  const undone = undoDraftHistoryState(history, draft);
+  assert.equal(undone.undone, true);
+  assert.equal(detectRepeatCandidates(undone.draft).length, 1);
 });
