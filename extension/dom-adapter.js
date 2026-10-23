@@ -24,9 +24,18 @@
 export function extractDomSnapshot(doc = document) {
   const SECTION_MARKER_GLOBAL = /\[([^[\]]{1,60})]/g;
   const TAB_LINE_PATTERN = /^(?:[eBGDAE]\s*\|[-0-9/\\pbhr~s\s|]+|\|[-0-9/\\pbhr~s\s|]{7,}\|)$/i;
+  const CHORD_NAME_PATTERN = /^[A-G](?:#|b)?(?:(?:maj|min|dim|aug|sus|add|m|M)|\d|[°ºøØ+()#b-]|\/(?=\d))*(?:\/[A-G](?:#|b)?)?$/;
+  const CHORD_DIAGRAM_SUFFIX = /^(.*?)-{3,}([x0-9]{6})$/i;
 
   /** @param {unknown} value */
   const inline = (value) => String(value || "").replace(/\s+/g, " ").trim();
+
+  /** @param {unknown} value */
+  const isChordDiagramDefinition = (value) => {
+    const compact = String(value || "").replace(/[\s\u200b\ufeff]+/g, "");
+    const match = compact.match(CHORD_DIAGRAM_SUFFIX);
+    return Boolean(match && CHORD_NAME_PATTERN.test(match[1]));
+  };
 
   /** @param {string} text */
   const extractSectionLabels = (text) => {
@@ -185,7 +194,9 @@ export function extractDomSnapshot(doc = document) {
   };
 
   for (const row of rows) {
-    const rowBolds = row.querySelectorAll("b[data-chord-name]");
+    const rowBolds = Array.from(row.querySelectorAll("b[data-chord-name]")).filter(
+      (node) => !isChordDiagramDefinition(node.getAttribute("data-chord-name")),
+    );
     if (rowBolds.length === 0) {
       const rawLines = String(row.textContent || "").split(/\r?\n/);
       for (const rawLine of rawLines) {
@@ -217,6 +228,7 @@ export function extractDomSnapshot(doc = document) {
       if (child.nodeType === 1 && /** @type {Element} */ (child).tagName === "B") {
         const element = /** @type {Element} */ (child);
         const chordName = inline(element.getAttribute("data-chord-name"));
+        if (isChordDiagramDefinition(chordName)) continue;
         pendingChords.push(chordName);
         totalChords += 1;
 

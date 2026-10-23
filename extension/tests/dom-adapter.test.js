@@ -273,6 +273,44 @@ test("extractDomSnapshot ignora acordes auxiliares sem índice quando a sequênc
   ]);
 });
 
+test("extractDomSnapshot ignora legendas de posições sem contaminar a progressão", () => {
+  const doc = buildMockDocument({
+    rows: [
+      {
+        nodes: [
+          { type: "b", name: "A", text: "A", index: "0" },
+          { type: "b", name: "D/F#", text: "D/F#", index: "1" },
+        ],
+      },
+      {
+        nodes: [
+          { type: "text", text: "\u200b" },
+          { type: "b", name: "Em/G-------322000", text: "Em/G-------322000", index: "2" },
+        ],
+      },
+      {
+        nodes: [
+          { type: "text", text: "\u200b" },
+          { type: "b", name: "D/F#-------200232", text: "D/F#-------200232", index: "3" },
+          { type: "text", text: "\n\u200bBm---------x24432\n" },
+        ],
+      },
+    ],
+  });
+
+  const result = extractDomSnapshot(doc);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+
+  const canonical = extractCanonicalCifra(result.snapshot);
+  assert.equal(canonical.ok, true);
+  if (!canonical.ok) return;
+
+  assert.equal(canonical.chordCount, 2);
+  const source = parseCifraSource(canonical.text, { sourceFormat: "plain" });
+  assert.deepEqual(source.allChords.map((chord) => chord.raw), ["A", "D/F#"]);
+});
+
 test("extractDomSnapshot preserva tablatura e seção quando marcador está apenas em data-chord-original-trailing", () => {
   const doc = buildMockDocument({
     rows: [
