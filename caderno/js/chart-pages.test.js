@@ -8,6 +8,7 @@ import {
   flattenChartMeasures,
   paginateChartSystems,
   resolveReadingLayoutProfile,
+  resolveReadingPresentation,
 } from "./chart-pages.js";
 
 function song(sectionSizes, barsPerRow = 4) {
@@ -188,4 +189,105 @@ test("resolveReadingLayoutProfile mantém uma superfície larga em todos os view
 
   assert.ok(mobilePortrait.systemCapacity <= 12);
   assert.ok(tabletPortrait.systemCapacity <= 12);
+});
+
+test("resolveReadingPresentation mantém celular e tablet em uma folha e libera notebook largo", () => {
+  const viewports = [
+    { name: "celular retrato", width: 390, height: 844, expectedSpan: 1 },
+    { name: "celular horizontal", width: 844, height: 390, expectedSpan: 1 },
+    { name: "tablet retrato", width: 768, height: 1024, expectedSpan: 1 },
+    { name: "tablet horizontal", width: 1024, height: 768, expectedSpan: 1 },
+    { name: "notebook 1366", width: 1366, height: 768, expectedSpan: 2 },
+    { name: "notebook 1440", width: 1440, height: 900, expectedSpan: 2 },
+  ];
+
+  for (const viewport of viewports) {
+    const presentation = resolveReadingPresentation({
+      viewportWidth: viewport.width,
+      viewportHeight: viewport.height,
+      totalPages: 4,
+    });
+    assert.equal(presentation.pageSpan, viewport.expectedSpan, viewport.name);
+  }
+});
+
+test("resolveReadingPresentation limita o zoom manual e trata 67% como preferência, não zoom global", () => {
+  const minimum = resolveReadingPresentation({
+    viewportWidth: 1366,
+    viewportHeight: 768,
+    totalPages: 4,
+    preferences: { zoomMode: "manual", zoomPercent: 10 },
+  });
+  const maximum = resolveReadingPresentation({
+    viewportWidth: 1366,
+    viewportHeight: 768,
+    totalPages: 4,
+    preferences: { zoomMode: "manual", zoomPercent: 999 },
+  });
+  const fit = resolveReadingPresentation({
+    viewportWidth: 1366,
+    viewportHeight: 768,
+    totalPages: 4,
+    preferences: { zoomMode: "fit", zoomPercent: 67 },
+  });
+
+  assert.equal(minimum.zoomPercent, 67);
+  assert.equal(maximum.zoomPercent, 150);
+  assert.equal(maximum.pageSpan, 1);
+  assert.equal(maximum.fallbackReason, "spread-overflow");
+  assert.equal(fit.zoomPercent, 100);
+});
+
+test("resolveReadingPresentation usa uma folha para cifra curta e preserva spread em paginação ímpar", () => {
+  const shortChart = resolveReadingPresentation({
+    viewportWidth: 1440,
+    viewportHeight: 900,
+    totalPages: 1,
+  });
+  const oddLastPage = resolveReadingPresentation({
+    viewportWidth: 1440,
+    viewportHeight: 900,
+    totalPages: 3,
+  });
+
+  assert.equal(shortChart.pageSpan, 1);
+  assert.equal(shortChart.fallbackReason, "single-page");
+  assert.equal(oddLastPage.pageSpan, 2);
+  assert.equal(oddLastPage.fallbackReason, null);
+});
+
+test("resolveReadingPresentation respeita escolha de uma folha e recua quando o spread fica ilegível", () => {
+  const forcedSingle = resolveReadingPresentation({
+    viewportWidth: 1440,
+    viewportHeight: 900,
+    totalPages: 4,
+    preferences: { spreadMode: "single" },
+  });
+  const illegibleSpread = resolveReadingPresentation({
+    viewportWidth: 1366,
+    viewportHeight: 768,
+    totalPages: 4,
+    minSheetWidth: 500,
+    preferences: { spreadMode: "spread", zoomMode: "manual", zoomPercent: 67 },
+  });
+
+  assert.equal(forcedSingle.pageSpan, 1);
+  assert.equal(forcedSingle.fallbackReason, "forced-single");
+  assert.equal(illegibleSpread.pageSpan, 1);
+  assert.equal(illegibleSpread.fallbackReason, "sheet-too-narrow");
+  assert.ok(illegibleSpread.sheetWidth >= 280);
+});
+
+test("resolveReadingPresentation nunca devolve duas folhas maiores que a largura disponível", () => {
+  for (const viewportWidth of [1200, 1366]) {
+    const presentation = resolveReadingPresentation({
+      viewportWidth,
+      viewportHeight: 700,
+      totalPages: 4,
+      preferences: { spreadMode: "spread", zoomMode: "manual", zoomPercent: 150 },
+    });
+
+    assert.equal(presentation.pageSpan, 1);
+    assert.equal(presentation.fallbackReason, "spread-overflow");
+  }
 });

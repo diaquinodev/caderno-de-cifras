@@ -52,8 +52,29 @@
  * @property {number} usableHeight
  */
 
+/**
+ * @typedef {Object} ReadingPreferences
+ * @property {"auto" | "single" | "spread"} spreadMode
+ * @property {"fit" | "manual"} zoomMode
+ * @property {number} zoomPercent
+ */
+
+/**
+ * @typedef {Object} ReadingPresentation
+ * @property {1 | 2} pageSpan
+ * @property {number} zoomPercent
+ * @property {number} sheetWidth
+ * @property {null | "forced-single" | "single-page" | "portrait" | "viewport-too-narrow" | "sheet-too-narrow" | "spread-overflow"} fallbackReason
+ */
+
 export const DEFAULT_MIN_SHEET_WIDTH = 420;
 export const DEFAULT_HORIZONTAL_CHROME = 36;
+export const DEFAULT_MAX_SHEET_WIDTH = 960;
+export const DEFAULT_SPREAD_GAP = 16;
+export const DEFAULT_MIN_SPREAD_VIEWPORT_WIDTH = 1200;
+export const DEFAULT_READING_ZOOM_PERCENT = 100;
+export const MIN_READING_ZOOM_PERCENT = 67;
+export const MAX_READING_ZOOM_PERCENT = 150;
 export const DEFAULT_CELLS_PER_SYSTEM = 16;
 export const DEFAULT_MAX_SYSTEMS_PER_PAGE = 12;
 export const DEFAULT_SYSTEMS_PER_PAGE = 8;
@@ -249,7 +270,7 @@ export function resolveReadingLayoutProfile(options = {}) {
   const horizontalChrome = nonNegativeInteger(options.horizontalChrome, DEFAULT_HORIZONTAL_CHROME);
   const singleSheetWidth = Math.min(
     Math.max(280, viewportWidth - horizontalChrome),
-    960
+    DEFAULT_MAX_SHEET_WIDTH
   );
   const systemCapacity = viewportHeight < 500 ? 4 : DEFAULT_SYSTEMS_PER_PAGE;
 
@@ -260,6 +281,77 @@ export function resolveReadingLayoutProfile(options = {}) {
     minSheetWidth,
     usableSheetWidth: singleSheetWidth,
     usableHeight: viewportHeight,
+  };
+}
+
+/**
+ * Decide como as folhas podem ser apresentadas sem alterar a estrutura musical.
+ * O modo duplo depende do espaço real disponível e sempre volta para uma folha
+ * quando duas superfícies ficariam estreitas demais.
+ *
+ * @param {Object} [options]
+ * @param {number} [options.viewportWidth]
+ * @param {number} [options.viewportHeight]
+ * @param {number} [options.totalPages]
+ * @param {Partial<ReadingPreferences>} [options.preferences]
+ * @param {number} [options.minSheetWidth]
+ * @param {number} [options.horizontalChrome]
+ * @param {number} [options.spreadGap]
+ * @param {number} [options.minSpreadViewportWidth]
+ * @returns {ReadingPresentation}
+ */
+export function resolveReadingPresentation(options = {}) {
+  const viewportWidth = positiveInteger(options.viewportWidth, 1024);
+  const viewportHeight = positiveInteger(options.viewportHeight, 768);
+  const totalPages = positiveInteger(options.totalPages, 1);
+  const minSheetWidth = positiveInteger(options.minSheetWidth, DEFAULT_MIN_SHEET_WIDTH);
+  const horizontalChrome = nonNegativeInteger(options.horizontalChrome, DEFAULT_HORIZONTAL_CHROME);
+  const spreadGap = nonNegativeInteger(options.spreadGap, DEFAULT_SPREAD_GAP);
+  const minSpreadViewportWidth = positiveInteger(
+    options.minSpreadViewportWidth,
+    DEFAULT_MIN_SPREAD_VIEWPORT_WIDTH
+  );
+  const spreadMode = ["auto", "single", "spread"].includes(options.preferences?.spreadMode)
+    ? options.preferences.spreadMode
+    : "auto";
+  const zoomMode = ["fit", "manual"].includes(options.preferences?.zoomMode)
+    ? options.preferences.zoomMode
+    : "fit";
+  const requestedZoom = Number(options.preferences?.zoomPercent);
+  const zoomPercent = zoomMode === "manual"
+    ? clampInteger(requestedZoom, MIN_READING_ZOOM_PERCENT, MAX_READING_ZOOM_PERCENT, DEFAULT_READING_ZOOM_PERCENT)
+    : DEFAULT_READING_ZOOM_PERCENT;
+  const availableWidth = Math.max(280, viewportWidth - horizontalChrome);
+  const singleSheetWidth = scaledSheetWidth(
+    Math.min(availableWidth, DEFAULT_MAX_SHEET_WIDTH),
+    zoomPercent
+  );
+
+  const single = (fallbackReason) => ({
+    pageSpan: 1,
+    zoomPercent,
+    sheetWidth: singleSheetWidth,
+    fallbackReason,
+  });
+
+  if (spreadMode === "single") return single("forced-single");
+  if (totalPages < 2) return single("single-page");
+  if (viewportWidth <= viewportHeight) return single("portrait");
+  if (viewportWidth < minSpreadViewportWidth) return single("viewport-too-narrow");
+
+  const spreadBaseWidth = Math.min(
+    Math.floor((availableWidth - spreadGap) / 2),
+    DEFAULT_MAX_SHEET_WIDTH
+  );
+  const spreadSheetWidth = scaledSheetWidth(spreadBaseWidth, zoomPercent);
+  if (spreadSheetWidth < minSheetWidth) return single("sheet-too-narrow");
+  if ((spreadSheetWidth * 2) + spreadGap > availableWidth) return single("spread-overflow");
+
+  return {
+    pageSpan: 2,
+    zoomPercent,
+    sheetWidth: spreadSheetWidth,
+    fallbackReason: null,
   };
 }
 
@@ -291,4 +383,14 @@ function positiveInteger(value, fallback) {
 function nonNegativeInteger(value, fallback) {
   const number = Math.floor(Number(value));
   return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
+function clampInteger(value, minimum, maximum, fallback) {
+  const number = Math.round(Number(value));
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(maximum, Math.max(minimum, number));
+}
+
+function scaledSheetWidth(width, zoomPercent) {
+  return Math.max(280, Math.floor(width * zoomPercent / 100));
 }
