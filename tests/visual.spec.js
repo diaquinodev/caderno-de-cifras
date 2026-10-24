@@ -155,7 +155,7 @@ test.describe("Caderno de Cifras - Provas Visuais Responsivas", () => {
         await expect(spread).toBeVisible();
         await expect(indicator).toBeVisible();
 
-        const expectedSpan = vp.width >= 1024 && vp.width > vp.height ? "2" : "1";
+        const expectedSpan = "1";
         await expect(spread).toHaveAttribute("data-page-span", expectedSpan);
 
         await page.screenshot({
@@ -163,7 +163,7 @@ test.describe("Caderno de Cifras - Provas Visuais Responsivas", () => {
           fullPage: false,
         });
 
-        // Verifica ausência de overflow horizontal e visibilidade integral das linhas em cada página/dupla
+        // Verifica uma superfície sem corte horizontal; rolagem vertical é permitida.
         const totalPages = Number(await spread.getAttribute("data-total-pages"));
         expect(totalPages).toBeGreaterThanOrEqual(1);
 
@@ -171,19 +171,20 @@ test.describe("Caderno de Cifras - Provas Visuais Responsivas", () => {
         for (let step = 1; step <= maxSteps; step += 1) {
           const metrics = await page.evaluate(() => {
             const lines = [...document.querySelectorAll("#chart-reading-spread .staff-line")];
-            const allLinesVisible = lines.every((l) => {
+            const sheet = document.querySelector("#chart-reading-spread .paper.sheet")?.getBoundingClientRect();
+            const allLinesInsideSheet = Boolean(sheet) && lines.every((l) => {
               const r = l.getBoundingClientRect();
-              return r.top >= 0 && r.bottom <= window.innerHeight && r.height >= 20;
+              return r.left >= sheet.left - 1 && r.right <= sheet.right + 1 && r.height >= 20;
             });
             return {
               overflowX: document.documentElement.scrollWidth - window.innerWidth,
               lineCount: lines.length,
-              allLinesVisible,
+              allLinesInsideSheet,
             };
           });
           expect(metrics.overflowX).toBeLessThanOrEqual(0);
           expect(metrics.lineCount).toBeGreaterThan(0);
-          expect(metrics.allLinesVisible).toBe(true);
+          expect(metrics.allLinesInsideSheet).toBe(true);
 
           if (step < maxSteps) {
             await page.keyboard.press("ArrowRight");

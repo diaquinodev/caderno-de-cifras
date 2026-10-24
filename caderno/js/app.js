@@ -43,7 +43,7 @@ import { analyzeSamples } from "./listen.js";
 import { inspectPdf, paintPdf, releasePdf } from "./pdfview.js";
 import {
   composeChartLayout,
-  composePageSpread,
+  findChartPageByMeasureId,
   resolveReadingLayoutProfile,
 } from "./chart-pages.js";
 import {
@@ -309,6 +309,7 @@ document.addEventListener("change", (event) => {
     return;
   }
   if (field.hasAttribute("data-preview-key") && song) {
+    const readingAnchor = isReadingChart(song) ? captureReadingAnchor() : null;
     state.previewKey = field.value && field.value !== song.key ? field.value : null;
     const banner = document.querySelector("#preview-banner");
     if (banner) {
@@ -316,7 +317,9 @@ document.addEventListener("change", (event) => {
       const label = banner.querySelector("[data-preview-label]");
       if (label && state.previewKey) label.textContent = `Visualização em ${state.previewKey}. A cifra salva continua em ${song.key}.`;
     }
+    setReadingPageFromAnchor(song, readingAnchor);
     paintPaper();
+    restoreReadingAnchor(readingAnchor);
     return;
   }
   if (field.hasAttribute("data-file-song") && song) {
@@ -393,20 +396,58 @@ window.addEventListener("beforeunload", () => {
 });
 
 let resizeDebounce = 0;
+let resizeReadingAnchor = null;
 window.addEventListener("resize", () => {
+  resizeReadingAnchor ||= captureReadingAnchor();
   fitPerformanceSheet();
   clearTimeout(resizeDebounce);
   resizeDebounce = setTimeout(() => {
     if (document.querySelector(".pdf-canvas")) {
+      resizeReadingAnchor = null;
       mountPdfFrame();
       return;
     }
     const song = currentSong();
     if (isReadingChart(song)) {
+      const anchor = resizeReadingAnchor;
+      setReadingPageFromAnchor(song, anchor);
+      resizeReadingAnchor = null;
       renderMain();
+      restoreReadingAnchor(anchor);
+      return;
     }
+    resizeReadingAnchor = null;
   }, 100);
 });
+
+function captureReadingAnchor() {
+  const bars = [...document.querySelectorAll("#paper-body .adaptive-bar")];
+  const visibleBar = bars.find((bar) => {
+    const rect = bar.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight;
+  });
+  const anchorBar = visibleBar || bars[0];
+  return anchorBar ? {
+    measureId: anchorBar.dataset.measureId || "",
+    viewportTop: anchorBar.getBoundingClientRect().top,
+  } : null;
+}
+
+function setReadingPageFromAnchor(song, anchor) {
+  if (!anchor?.measureId) return;
+  const profile = resolveChartLayoutProfile();
+  const sections = transposeSections(song.sections || [], song.key, state.previewKey);
+  const layout = composeChartLayout({ ...song, sections }, { systemCapacity: profile.systemCapacity });
+  state.stagePage = findChartPageByMeasureId(layout.pages, anchor.measureId, state.stagePage || 1);
+}
+
+function restoreReadingAnchor(anchor) {
+  if (!anchor?.measureId) return;
+  const bar = [...document.querySelectorAll("#paper-body .adaptive-bar")]
+    .find((item) => item.dataset.measureId === anchor.measureId);
+  if (!bar) return;
+  window.scrollBy(0, bar.getBoundingClientRect().top - anchor.viewportTop);
+}
 window.addEventListener("beforeprint", () => {
   clearSheetFit(document.querySelector(".paper.sheet"));
   fitGlyphs();
@@ -1125,7 +1166,7 @@ function fitHeaderFields() {
  * @typedef {Object} ChartReadingPosition
  * @property {number} songIndex
  * @property {number} pageIndex
- * @property {import("./chart-pages.js").ReadingSpread} spread
+ * @property {import("./chart-pages.js").AdaptiveChartPage} activePage
  * @property {import("./chart-pages.js").ReadingLayoutProfile} profile
  * @property {import("./chart-pages.js").AdaptiveChartLayout} layout
  * @property {import("./chart-pages.js").AdaptiveChartPage[]} pages
@@ -1144,7 +1185,6 @@ function resolveChartLayoutProfile() {
     viewportWidth,
     viewportHeight,
     horizontalChrome: cleanOrFullscreen ? 16 : 36,
-    verticalChrome: cleanOrFullscreen ? 84 : 136,
   });
 }
 
@@ -1157,7 +1197,7 @@ function getRuntimeChartPageCount(song) {
 
 function getRuntimeChartPageSpan(song) {
   if (!song) return 1;
-  return resolveChartLayoutProfile().pageSpan || 1;
+  return 1;
 }
 
 function performancePageOptions(song) {
@@ -1182,12 +1222,13 @@ function getChartReadingPosition(song) {
     { systemCapacity: profile.systemCapacity }
   );
   const pages = layout.pages;
-  const spread = composePageSpread(pages, state.stagePage || 1, profile);
+  const pageIndex = Math.min(pages.length, Math.max(1, Number(state.stagePage) || 1));
+  const activePage = pages[pageIndex - 1] || pages[0];
   const songIndex = state.route.name === "stage" ? Math.max(0, Number(state.stageIndex) || 0) : 0;
   return {
     songIndex,
-    pageIndex: spread.firstPage,
-    spread,
+    pageIndex,
+    activePage,
     profile,
     layout,
     pages,
@@ -1272,14 +1313,11 @@ function chartReadingBar(song) {
   const items = setlist?.items || (song ? [{ songId: song.id }] : []);
   const pageOptions = performancePageOptions(song);
   const pages = getSongPageCount(song, pageOptions);
-  const { songIndex, pageIndex, spread } = getChartReadingPosition(song);
+  const { songIndex, pageIndex } = getChartReadingPosition(song);
   const currentPos = { itemIndex: songIndex, page: pageIndex };
   const canPrev = canStepPerformance(currentPos, -1, { items, library: state.library, ...pageOptions });
   const canNext = canStepPerformance(currentPos, 1, { items, library: state.library, ...pageOptions });
-  const visibleIndexes = spread.visiblePages.map((p) => p.index);
-  const pageLabel = visibleIndexes.length > 1
-    ? `Página ${visibleIndexes[0]}–${visibleIndexes.at(-1)} de ${pages}`
-    : `Página ${pageIndex} de ${pages}`;
+  const pageLabel = `Página ${pageIndex} de ${pages}`;
   const fallbackNote = state.fullscreen && state.fullscreenFallback
     ? `<span class="fullscreen-fallback-note" id="fullscreen-fallback-status" role="status">Modo janela (API de tela cheia indisponível)</span>`
     : "";
@@ -1330,7 +1368,7 @@ function paintPaper(focusId) {
   if (reading) {
     const spreadHost = /** @type {HTMLElement | null} */ (document.querySelector("#chart-reading-spread"));
     if (!spreadHost) return;
-    const { pageIndex, spread, profile, layout, pages } = getChartReadingPosition(song);
+    const { pageIndex, activePage, profile, layout, pages } = getChartReadingPosition(song);
     const totalPages = pages.length;
     state.stagePage = pageIndex;
 
@@ -1339,36 +1377,31 @@ function paintPaper(focusId) {
     const nextEntry = setlist?.items?.[state.stageIndex + 1];
     const nextSong = nextEntry ? findSong(state.library, nextEntry.songId) : null;
 
-    spreadHost.className = `reading-spread ${spread.pageSpan === 2 ? "is-double" : "is-single"}${spread.pageSpan === 2 && spread.visiblePages.length < 2 ? " is-incomplete" : ""}`;
-    spreadHost.dataset.pageSpan = String(spread.pageSpan);
-    spreadHost.dataset.firstPage = String(spread.firstPage);
+    spreadHost.className = "reading-spread is-single";
+    spreadHost.dataset.pageSpan = "1";
+    spreadHost.dataset.firstPage = String(pageIndex);
     spreadHost.dataset.totalPages = String(totalPages);
-    spreadHost.dataset.visiblePages = spread.visiblePages.map((p) => p.index).join(",");
+    spreadHost.dataset.visiblePages = String(pageIndex);
     spreadHost.dataset.minSheetWidth = String(profile.minSheetWidth || 420);
     spreadHost.dataset.density = layout.density;
     spreadHost.dataset.systemCapacity = String(layout.systemCapacity);
     spreadHost.style.setProperty("--sheet-target-width", `${profile.usableSheetWidth}px`);
 
-    spreadHost.innerHTML = spread.visiblePages.map((activePage, spreadIdx) => {
-      const sheetId = onStage
-        ? (spreadIdx === 0 ? "stage-paper" : `stage-paper-${spreadIdx + 1}`)
-        : (spreadIdx === 0 ? "clean-paper" : `clean-paper-${spreadIdx + 1}`);
-      const bodyId = spreadIdx === 0 ? "paper-body" : `paper-body-${spreadIdx + 1}`;
-      const isLastVisibleSheet = spreadIdx === spread.visiblePages.length - 1;
-      const bodyHtml = renderAdaptiveReadingPage(activePage, layout, hasTime, beats, unit);
-      return `<article class="paper sheet" id="${sheetId}" data-page="${activePage.index}" data-total-pages="${totalPages}">
+    const sheetId = onStage ? "stage-paper" : "clean-paper";
+    const continuation = activePage.index > 1;
+    const bodyHtml = renderAdaptiveReadingPage(activePage, layout, hasTime, beats, unit);
+    spreadHost.innerHTML = `<article class="paper sheet${continuation ? " is-continuation" : ""}" id="${sheetId}" data-page="${activePage.index}" data-total-pages="${totalPages}">
         <div class="lead">
-          <h1 class="sheet-title">${esc(song.title)}</h1>
-          <div class="sheet-sub">
+          <h1 class="sheet-title">${esc(song.title)}${continuation ? ` · ${activePage.index}/${totalPages}` : ""}</h1>
+          ${continuation ? "" : `<div class="sheet-sub">
             <p class="sheet-style">${song.style ? `(${esc(song.style)})` : ""}</p>
             <p class="sheet-composer">${esc(song.composer)}</p>
-          </div>
-          <div id="${bodyId}" class="paper-body">${bodyHtml}</div>
+          </div>`}
+          <div id="paper-body" class="paper-body">${bodyHtml}</div>
           ${onStage && song.notes && activePage.index === totalPages ? `<p class="sheet-notes static">${esc(song.notes)}</p>` : ""}
-          ${onStage && isLastVisibleSheet ? `<p class="hint">${nextSong ? `A seguir: ${esc(nextSong.title)} · ${esc(nextEntry?.key || nextSong.key)}` : "Última música da setlist."}</p>` : ""}
+          ${onStage ? `<p class="hint">${nextSong ? `A seguir: ${esc(nextSong.title)} · ${esc(nextEntry?.key || nextSong.key)}` : "Última música da setlist."}</p>` : ""}
         </div>
       </article>`;
-    }).join("");
 
     const barHost = document.querySelector("#chart-reading-bar-host");
     if (barHost) barHost.innerHTML = chartReadingBar(song);
