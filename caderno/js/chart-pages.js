@@ -82,6 +82,7 @@ export const DEFAULT_MIN_SPREAD_VIEWPORT_WIDTH = 1200;
 export const DEFAULT_READING_ZOOM_PERCENT = 100;
 export const MIN_READING_ZOOM_PERCENT = 67;
 export const MAX_READING_ZOOM_PERCENT = 150;
+export const READING_ZOOM_STEP_PERCENT = 10;
 export const DEFAULT_CELLS_PER_SYSTEM = 16;
 export const DEFAULT_MAX_SYSTEMS_PER_PAGE = 12;
 export const DEFAULT_SYSTEMS_PER_PAGE = 8;
@@ -359,6 +360,57 @@ export function resolveReadingPresentation(options = {}) {
     zoomPercent,
     sheetWidth: spreadSheetWidth,
     fallbackReason: null,
+  };
+}
+
+/**
+ * Atualiza somente a preferência de sessão do leitor. `fit` é idempotente e
+ * os passos manuais partem do zoom que está realmente resolvido na tela.
+ *
+ * @param {Partial<ReadingPreferences>} [preferences]
+ * @param {"decrease" | "increase" | "fit"} [command]
+ * @param {number} [resolvedZoomPercent]
+ * @returns {ReadingPreferences}
+ */
+export function updateReadingZoomPreferences(
+  preferences = {},
+  command = "fit",
+  resolvedZoomPercent = DEFAULT_READING_ZOOM_PERCENT
+) {
+  const spreadMode = ["auto", "single", "spread"].includes(preferences.spreadMode)
+    ? preferences.spreadMode
+    : "auto";
+  if (command === "fit") {
+    return {
+      spreadMode,
+      zoomMode: "fit",
+      zoomPercent: DEFAULT_READING_ZOOM_PERCENT,
+    };
+  }
+
+  const currentZoom = preferences.zoomMode === "manual"
+    ? clampInteger(
+      preferences.zoomPercent,
+      MIN_READING_ZOOM_PERCENT,
+      MAX_READING_ZOOM_PERCENT,
+      DEFAULT_READING_ZOOM_PERCENT
+    )
+    : clampInteger(
+      resolvedZoomPercent,
+      MIN_READING_ZOOM_PERCENT,
+      MAX_READING_ZOOM_PERCENT,
+      DEFAULT_READING_ZOOM_PERCENT
+    );
+  const direction = command === "decrease" ? -1 : 1;
+  return {
+    spreadMode,
+    zoomMode: "manual",
+    zoomPercent: clampInteger(
+      currentZoom + (direction * READING_ZOOM_STEP_PERCENT),
+      MIN_READING_ZOOM_PERCENT,
+      MAX_READING_ZOOM_PERCENT,
+      DEFAULT_READING_ZOOM_PERCENT
+    ),
   };
 }
 

@@ -11,6 +11,7 @@ import {
   normalizeReadingSpreadPage,
   resolveReadingLayoutProfile,
   resolveReadingPresentation,
+  updateReadingZoomPreferences,
 } from "./chart-pages.js";
 
 function song(sectionSizes, barsPerRow = 4) {
@@ -238,6 +239,25 @@ test("resolveReadingPresentation limita o zoom manual e trata 67% como preferên
   assert.equal(maximum.pageSpan, 1);
   assert.equal(maximum.fallbackReason, "spread-overflow");
   assert.equal(fit.zoomPercent, 100);
+});
+
+test("updateReadingZoomPreferences aplica passos, limites e Ajustar idempotente sem persistência", () => {
+  let preferences = updateReadingZoomPreferences({}, "decrease", 100);
+  assert.deepEqual(preferences, { spreadMode: "auto", zoomMode: "manual", zoomPercent: 90 });
+
+  for (let index = 0; index < 10; index += 1) {
+    preferences = updateReadingZoomPreferences(preferences, "decrease", preferences.zoomPercent);
+  }
+  assert.equal(preferences.zoomPercent, 67);
+
+  for (let index = 0; index < 20; index += 1) {
+    preferences = updateReadingZoomPreferences(preferences, "increase", preferences.zoomPercent);
+  }
+  assert.equal(preferences.zoomPercent, 150);
+
+  const fit = updateReadingZoomPreferences(preferences, "fit", preferences.zoomPercent);
+  assert.deepEqual(fit, { spreadMode: "auto", zoomMode: "fit", zoomPercent: 100 });
+  assert.deepEqual(updateReadingZoomPreferences(fit, "fit", 100), fit);
 });
 
 test("resolveReadingPresentation usa uma folha para cifra curta e preserva spread em paginação ímpar", () => {

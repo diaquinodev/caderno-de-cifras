@@ -158,6 +158,35 @@ test.describe("Caderno de Cifras - Provas Visuais Responsivas", () => {
         const expectedSpan = vp.width >= 1200 ? "2" : "1";
         await expect(spread).toHaveAttribute("data-page-span", expectedSpan);
 
+        if (vp.name === "mobile-portrait" || vp.name === "desktop-wide") {
+          await expect(page.locator("#toast")).toBeHidden({ timeout: 4000 });
+          await page.evaluate(() => window.scrollTo(0, 0));
+          await page.screenshot({
+            path: path.join(screenshotDir, `fase27-${vp.name}-zoom-ajustar.png`),
+            fullPage: false,
+          });
+
+          const decreaseZoom = page.locator('[data-action="reading-zoom"][data-command="decrease"]');
+          for (let step = 0; step < 4; step += 1) await decreaseZoom.click();
+          await expect(page.locator("#reading-zoom-value")).toHaveText("67%");
+          await page.evaluate(() => window.scrollTo(0, 0));
+          await page.screenshot({
+            path: path.join(screenshotDir, `fase27-${vp.name}-zoom-67.png`),
+            fullPage: false,
+          });
+
+          await page.click('[data-action="reading-zoom"][data-command="increase"]');
+          await expect(page.locator("#reading-zoom-value")).toHaveText("77%");
+          await page.evaluate(() => window.scrollTo(0, 0));
+          await page.screenshot({
+            path: path.join(screenshotDir, `fase27-${vp.name}-zoom-77.png`),
+            fullPage: false,
+          });
+
+          await page.click('[data-action="reading-zoom"][data-command="fit"]');
+          await expect(page.locator("#reading-zoom-value")).toHaveText("100%");
+        }
+
         if (vp.name === "tablet-landscape" || vp.name === "desktop-wide") {
           await expect(page.locator("#toast")).toBeHidden({ timeout: 4000 });
           await page.screenshot({
