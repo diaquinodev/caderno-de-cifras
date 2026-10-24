@@ -45,6 +45,7 @@ import {
   composeChartLayout,
   findChartPageByMeasureId,
   resolveReadingLayoutProfile,
+  resolveReadingPresentation,
 } from "./chart-pages.js";
 import {
   blankMeasure,
@@ -1370,6 +1371,13 @@ function paintPaper(focusId) {
     if (!spreadHost) return;
     const { pageIndex, activePage, profile, layout, pages } = getChartReadingPosition(song);
     const totalPages = pages.length;
+    const presentation = resolveReadingPresentation({
+      viewportWidth: typeof window !== "undefined" ? window.innerWidth : 1024,
+      viewportHeight: typeof window !== "undefined" ? window.innerHeight : 768,
+      totalPages,
+      minSheetWidth: profile.minSheetWidth,
+      horizontalChrome: state.route.name === "stage" || state.clean || state.fullscreen ? 16 : 36,
+    });
     state.stagePage = pageIndex;
 
     const onStage = state.route.name === "stage";
@@ -1383,6 +1391,10 @@ function paintPaper(focusId) {
     spreadHost.dataset.totalPages = String(totalPages);
     spreadHost.dataset.visiblePages = String(pageIndex);
     spreadHost.dataset.minSheetWidth = String(profile.minSheetWidth || 420);
+    spreadHost.dataset.resolvedPageSpan = String(presentation.pageSpan);
+    spreadHost.dataset.resolvedZoomPercent = String(presentation.zoomPercent);
+    spreadHost.dataset.resolvedSheetWidth = String(presentation.sheetWidth);
+    spreadHost.dataset.resolvedFallback = presentation.fallbackReason || "none";
     spreadHost.dataset.density = layout.density;
     spreadHost.dataset.systemCapacity = String(layout.systemCapacity);
     spreadHost.style.setProperty("--sheet-target-width", `${profile.usableSheetWidth}px`);

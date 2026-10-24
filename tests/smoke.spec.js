@@ -1495,6 +1495,7 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     const spread = page.locator("#chart-reading-spread");
     const indicator = page.locator("#chart-page-indicator");
     await expect(spread).toHaveAttribute("data-page-span", "1");
+    await expect(spread).toHaveAttribute("data-resolved-page-span", "1");
     await expect(spread.locator(".paper.sheet")).toHaveCount(1);
     await expect(indicator).toContainText("Página 1 de 3");
 
@@ -1560,6 +1561,10 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     ]) {
       await page.setViewportSize(vp);
       await expect(spread).toHaveAttribute("data-page-span", "1");
+      await expect(spread).toHaveAttribute(
+        "data-resolved-page-span",
+        vp.width >= 1200 ? "2" : "1"
+      );
       const metrics = await page.evaluate(() => {
         const sheets = [...document.querySelectorAll("#chart-reading-spread .paper.sheet")];
         const minSheetWidth = Number(document.querySelector("#chart-reading-spread")?.getAttribute("data-min-sheet-width") || 420);
