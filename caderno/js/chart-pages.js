@@ -44,23 +44,16 @@
 
 /**
  * @typedef {Object} ReadingLayoutProfile
+ * @property {16} cellsPerSystem
  * @property {number} systemCapacity
- * @property {number} [pageSpan]
+ * @property {1} pageSpan
  * @property {number} minSheetWidth
  * @property {number} usableSheetWidth
- */
-
-/**
- * @typedef {Object} ReadingSpread
- * @property {number} firstPage
- * @property {number} pageSpan
- * @property {AdaptiveChartPage[]} visiblePages
+ * @property {number} usableHeight
  */
 
 export const DEFAULT_MIN_SHEET_WIDTH = 420;
-export const DEFAULT_SPREAD_GAP = 16;
 export const DEFAULT_HORIZONTAL_CHROME = 36;
-export const DEFAULT_VERTICAL_CHROME = 136;
 export const DEFAULT_CELLS_PER_SYSTEM = 16;
 export const DEFAULT_MAX_SYSTEMS_PER_PAGE = 12;
 export const DEFAULT_SYSTEMS_PER_PAGE = 8;
@@ -238,88 +231,56 @@ export function composeChartLayout(song, profile = {}) {
 }
 
 /**
- * Resolve o perfil de leitura (1-up ou 2-up) pela largura útil de cada folha,
- * mantendo 1 folha em celular/retrato e ativando 2 folhas apenas quando cada
- * folha em orientação horizontal respeitar o piso de legibilidade.
+ * Resolve o perfil de leitura para uma única superfície musical. A largura
+ * acompanha o viewport sem ser limitada pela altura, evitando que o zoom do
+ * navegador encolha a cifra novamente para caber em uma folha dupla.
  *
  * @param {Object} [options]
  * @param {number} [options.viewportWidth]
  * @param {number} [options.viewportHeight]
  * @param {number} [options.minSheetWidth]
- * @param {number} [options.spreadGap]
  * @param {number} [options.horizontalChrome]
- * @param {number} [options.verticalChrome]
  * @returns {ReadingLayoutProfile}
  */
 export function resolveReadingLayoutProfile(options = {}) {
   const viewportWidth = positiveInteger(options.viewportWidth, 1024);
   const viewportHeight = positiveInteger(options.viewportHeight, 768);
   const minSheetWidth = positiveInteger(options.minSheetWidth, DEFAULT_MIN_SHEET_WIDTH);
-  const spreadGap = nonNegativeInteger(options.spreadGap, DEFAULT_SPREAD_GAP);
   const horizontalChrome = nonNegativeInteger(options.horizontalChrome, DEFAULT_HORIZONTAL_CHROME);
-  const verticalChrome = nonNegativeInteger(options.verticalChrome, DEFAULT_VERTICAL_CHROME);
-
-  const isLandscape = viewportWidth > viewportHeight;
-  const widthPerDualSheet = Math.floor((viewportWidth - horizontalChrome - spreadGap) / 2);
-  const heightBoundedWidth = Math.floor(Math.max(320, (viewportHeight - verticalChrome) * 0.68));
-  const dualSheetWidth = Math.min(widthPerDualSheet, heightBoundedWidth);
-  const canFitDualSheets = isLandscape && viewportHeight >= 560 && dualSheetWidth >= minSheetWidth;
-  const pageSpan = canFitDualSheets ? 2 : 1;
   const singleSheetWidth = Math.min(
     Math.max(280, viewportWidth - horizontalChrome),
-    Math.floor(Math.max(360, (viewportHeight - verticalChrome) * 0.68)),
     960
   );
-
-  const usableSheetWidth = pageSpan === 2 ? dualSheetWidth : singleSheetWidth;
   const systemCapacity = viewportHeight < 500 ? 4 : DEFAULT_SYSTEMS_PER_PAGE;
 
   return {
+    cellsPerSystem: DEFAULT_CELLS_PER_SYSTEM,
     systemCapacity,
-    pageSpan,
+    pageSpan: 1,
     minSheetWidth,
-    usableSheetWidth,
+    usableSheetWidth: singleSheetWidth,
+    usableHeight: viewportHeight,
   };
 }
 
 /**
- * Normaliza o índice da página ativa para o início da folha simples ou dupla.
- *
- * @param {number} [activePage]
- * @param {number} [totalPages]
- * @param {number | ReadingLayoutProfile} [spanOrProfile]
- * @returns {number}
- */
-export function normalizeSpreadPage(activePage = 1, totalPages = 1, spanOrProfile = 1) {
-  const rawSpan = typeof spanOrProfile === "object" && spanOrProfile !== null
-    ? spanOrProfile.pageSpan
-    : spanOrProfile;
-  const span = Math.min(2, positiveInteger(rawSpan, 1));
-  const total = Math.max(1, positiveInteger(totalPages, 1));
-  const active = Math.min(total, positiveInteger(activePage, 1));
-  return Math.floor((active - 1) / span) * span + 1;
-}
-
-/**
- * Agrupa páginas já compostas em uma folha simples ou dupla.
+ * Encontra a página que contém o compasso usado como âncora de leitura.
  *
  * @param {AdaptiveChartPage[]} pages
- * @param {number} [activePage]
- * @param {number | ReadingLayoutProfile} [spanOrProfile]
- * @returns {ReadingSpread}
+ * @param {string} measureId
+ * @param {number} [fallbackPage]
+ * @returns {number}
  */
-export function composePageSpread(pages, activePage = 1, spanOrProfile = 1) {
+export function findChartPageByMeasureId(pages, measureId, fallbackPage = 1) {
   const safePages = Array.isArray(pages) ? pages : [];
-  const rawSpan = typeof spanOrProfile === "object" && spanOrProfile !== null
-    ? spanOrProfile.pageSpan
-    : spanOrProfile;
-  const span = Math.min(2, positiveInteger(rawSpan, 1));
-  const firstPage = normalizeSpreadPage(activePage, safePages.length, span);
-  return {
-    firstPage,
-    pageSpan: span,
-    visiblePages: safePages.slice(firstPage - 1, firstPage - 1 + span),
-  };
+  const wantedId = String(measureId || "");
+  const match = wantedId
+    ? safePages.find((page) => page.systems.some((system) =>
+      system.placements.some((placement) => placement.atom.measureId === wantedId)
+    ))
+    : null;
+  const total = Math.max(1, safePages.length);
+  return match?.index || Math.min(total, positiveInteger(fallbackPage, 1));
 }
 
 function positiveInteger(value, fallback) {

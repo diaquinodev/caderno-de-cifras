@@ -3,10 +3,9 @@ import assert from "node:assert/strict";
 import {
   canUseCompactMeasure,
   composeChartLayout,
-  composePageSpread,
   composeChartSystems,
+  findChartPageByMeasureId,
   flattenChartMeasures,
-  normalizeSpreadPage,
   paginateChartSystems,
   resolveReadingLayoutProfile,
 } from "./chart-pages.js";
@@ -154,17 +153,19 @@ test("layout resume densidade mista e pagina sistemas inteiros sem forçar compa
   assert.deepEqual(layout.pages.flatMap((page) => page.systems.map((system) => system.density)), ["compact", "normal", "compact"]);
 });
 
-test("composePageSpread agrupa páginas em 1-up e 2-up", () => {
+test("findChartPageByMeasureId preserva a página do compasso âncora", () => {
   const chart = song([48]);
   chart.sections[0].measures.forEach((measure) => { measure.chords = "C7 G7"; });
   const pages = composeChartLayout(chart, { systemCapacity: 4 }).pages;
 
-  assert.deepEqual(composePageSpread(pages, 2, 1).visiblePages.map((page) => page.index), [2]);
-  assert.deepEqual(composePageSpread(pages, 2, 2).visiblePages.map((page) => page.index), [1, 2]);
-  assert.deepEqual(composePageSpread(pages, 3, { pageSpan: 2 }).visiblePages.map((page) => page.index), [3]);
+  assert.equal(findChartPageByMeasureId(pages, "measure-1"), 1);
+  assert.equal(findChartPageByMeasureId(pages, "measure-17"), 2);
+  assert.equal(findChartPageByMeasureId(pages, "measure-48"), 3);
+  assert.equal(findChartPageByMeasureId(pages, "inexistente", 2), 2);
+  assert.equal(findChartPageByMeasureId(pages, "inexistente", 99), 3);
 });
 
-test("resolveReadingLayoutProfile usa largura útil de cada folha e mantém 1-up em celular e retrato", () => {
+test("resolveReadingLayoutProfile mantém uma superfície larga em todos os viewports", () => {
   const mobilePortrait = resolveReadingLayoutProfile({ viewportWidth: 390, viewportHeight: 844 });
   const mobileLandscape = resolveReadingLayoutProfile({ viewportWidth: 844, viewportHeight: 390 });
   const tabletPortrait = resolveReadingLayoutProfile({ viewportWidth: 768, viewportHeight: 1024 });
@@ -176,23 +177,15 @@ test("resolveReadingLayoutProfile usa largura útil de cada folha e mantém 1-up
   assert.equal(mobileLandscape.pageSpan, 1);
   assert.equal(mobileLandscape.systemCapacity, 4);
   assert.equal(tabletPortrait.pageSpan, 1);
-
-  assert.equal(tabletLandscape.pageSpan, 2);
-  assert.ok(tabletLandscape.usableSheetWidth >= tabletLandscape.minSheetWidth);
-
-  assert.equal(notebook1366.pageSpan, 2);
-  assert.ok(notebook1366.usableSheetWidth >= notebook1366.minSheetWidth);
-
-  assert.equal(notebook1440.pageSpan, 2);
-  assert.ok(notebook1440.usableSheetWidth >= notebook1440.minSheetWidth);
+  assert.equal(tabletLandscape.pageSpan, 1);
+  assert.equal(notebook1366.pageSpan, 1);
+  assert.equal(notebook1440.pageSpan, 1);
+  assert.equal(tabletLandscape.cellsPerSystem, 16);
+  assert.equal(tabletLandscape.usableHeight, 768);
+  assert.equal(tabletLandscape.usableSheetWidth, 960);
+  assert.equal(notebook1366.usableSheetWidth, 960);
+  assert.equal(notebook1440.usableSheetWidth, 960);
 
   assert.ok(mobilePortrait.systemCapacity <= 12);
   assert.ok(tabletPortrait.systemCapacity <= 12);
-});
-
-test("normalizeSpreadPage normaliza posição ao alternar entre 1-up e 2-up e permite última dupla incompleta", () => {
-  assert.equal(normalizeSpreadPage(2, 3, 2), 1);
-  assert.equal(normalizeSpreadPage(3, 3, 2), 3);
-  assert.equal(normalizeSpreadPage(4, 4, 2), 3);
-  assert.equal(normalizeSpreadPage(2, 3, 1), 2);
 });
