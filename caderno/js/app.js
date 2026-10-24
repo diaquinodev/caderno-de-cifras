@@ -1311,7 +1311,7 @@ function renderAdaptiveReadingPage(activePage, layout, hasTime, beats, unit) {
         sectionMarker,
       });
     }).join("");
-    return `<div class="staff-line adaptive-system${hasSectionMarker ? " has-section-marker" : ""}" data-system-index="${system.index}" data-cells-used="${system.cellsUsed}">
+    return `<div class="staff-line adaptive-system${hasSectionMarker ? " has-section-marker" : ""}" data-system-index="${system.index}" data-density="${system.density}" data-cells-used="${system.cellsUsed}">
       ${showTime ? `<div class="time-sig" aria-hidden="true"><span>${esc(beats)}</span><span>${esc(unit)}</span></div>` : ""}
       ${cells}
     </div>`;
