@@ -1667,6 +1667,147 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     expect(errors).toEqual([]);
   });
 
+  test("fase 27: zoom interno redimensiona somente a cifra, preserva âncora e não altera a música", async ({ page }) => {
+    const measures = Array.from({ length: 64 }, (_, index) => ({
+      id: `zoom-${index + 1}`,
+      chords: index === 0 ? "C7M" : "Dm7 G7 A7",
+      ending: "",
+      repeat: "",
+    }));
+    const zoomLibrary = {
+      version: 2,
+      pdfDocuments: [],
+      songs: [{
+        id: "song-zoom",
+        title: "Zoom de Palco",
+        composer: "Caderno",
+        style: "Jazz",
+        key: "C",
+        tempo: 120,
+        timeSignature: "4/4",
+        barsPerRow: 4,
+        sections: [{ id: "zoom-section", label: "Principal", measures }],
+      }],
+      playlists: [],
+      setlists: [],
+    };
+
+    const errors = await setupPage(page, { library: zoomLibrary, seedPdf: false });
+    await page.setViewportSize({ width: 1440, height: 700 });
+    await gotoRoute(page, "#/musicas/song-zoom");
+    await page.click('[data-action="toggle-clean"]');
+
+    const spread = page.locator("#chart-reading-spread");
+    const zoomValue = page.locator("#reading-zoom-value");
+    const decrease = page.locator('[data-action="reading-zoom"][data-command="decrease"]');
+    const increase = page.locator('[data-action="reading-zoom"][data-command="increase"]');
+    const fit = page.locator('[data-action="reading-zoom"][data-command="fit"]');
+    const storedSongBefore = await page.evaluate(() => localStorage.getItem("caderno.library.v1"));
+
+    const readMetrics = () => page.evaluate(() => {
+      const sheet = document.querySelector("#chart-reading-spread .paper.sheet");
+      const chord = document.querySelector("#chart-reading-spread .root");
+      const host = document.querySelector("#chart-reading-spread");
+      return {
+        sheetWidth: sheet?.getBoundingClientRect().width || 0,
+        chordSize: Number.parseFloat(chord ? getComputedStyle(chord).fontSize : "0"),
+        innerOverflow: (host?.scrollWidth || 0) - (host?.clientWidth || 0),
+        documentOverflow: document.documentElement.scrollWidth - window.innerWidth,
+      };
+    });
+
+    await expect(zoomValue).toHaveText("100%");
+    await expect(fit).toHaveAttribute("aria-pressed", "true");
+    await expect(spread).toHaveAttribute("data-page-span", "2");
+    const fitMetrics = await readMetrics();
+
+    await decrease.click();
+    await expect(zoomValue).toHaveText("90%");
+    await expect(fit).toHaveAttribute("aria-pressed", "false");
+    const reducedMetrics = await readMetrics();
+    expect(reducedMetrics.sheetWidth).toBeLessThan(fitMetrics.sheetWidth);
+    expect(reducedMetrics.chordSize).toBeLessThan(fitMetrics.chordSize);
+
+    await decrease.click();
+    await decrease.click();
+    await decrease.click();
+    await expect(zoomValue).toHaveText("67%");
+    await expect(decrease).toBeDisabled();
+    const minimumMetrics = await readMetrics();
+
+    await page.locator('[data-measure-id="zoom-5"]').evaluate((bar) => bar.scrollIntoView({ block: "start" }));
+    const anchorBeforeZoom = await page.evaluate(() => {
+      const bar = [...document.querySelectorAll("#chart-reading-spread .adaptive-bar")].find((item) => {
+        const rect = item.getBoundingClientRect();
+        return rect.bottom > 0 && rect.top < window.innerHeight;
+      });
+      return { id: bar?.getAttribute("data-measure-id") || "", top: bar?.getBoundingClientRect().top || 0 };
+    });
+    expect(anchorBeforeZoom.id).toBeTruthy();
+
+    await page.keyboard.press("=");
+    await expect(zoomValue).toHaveText("77%");
+    const enlargedMetrics = await readMetrics();
+    expect(enlargedMetrics.sheetWidth).toBeGreaterThan(minimumMetrics.sheetWidth);
+    expect(enlargedMetrics.chordSize).toBeGreaterThan(minimumMetrics.chordSize);
+    const anchoredBar = page.locator(`[data-measure-id="${anchorBeforeZoom.id}"]`);
+    await expect(anchoredBar).toHaveCount(1);
+    const anchorTopAfterZoom = await anchoredBar.evaluate((bar) => bar.getBoundingClientRect().top);
+    expect(Math.abs(anchorTopAfterZoom - anchorBeforeZoom.top)).toBeLessThanOrEqual(2);
+
+    await page.locator("select[data-preview-key]").evaluate((field) => {
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "+", bubbles: true }));
+    });
+    await expect(zoomValue).toHaveText("77%");
+    await page.keyboard.press("-");
+    await expect(zoomValue).toHaveText("67%");
+
+    await page.keyboard.press("0");
+    await expect(zoomValue).toHaveText("100%");
+    await expect(fit).toHaveAttribute("aria-pressed", "true");
+    const firstFitAgain = await readMetrics();
+    await page.keyboard.press("0");
+    const secondFitAgain = await readMetrics();
+    expect(secondFitAgain.sheetWidth).toBeCloseTo(firstFitAgain.sheetWidth, 1);
+
+    await page.keyboard.press("+");
+    await expect(zoomValue).toHaveText("110%");
+    await page.keyboard.press("0");
+    const browserShortcutPrevented = await page.evaluate(() => {
+      const event = new KeyboardEvent("keydown", {
+        key: "=",
+        ctrlKey: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      document.body.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    expect(browserShortcutPrevented).toBe(false);
+    await expect(zoomValue).toHaveText("100%");
+
+    await increase.click();
+    await expect(zoomValue).toHaveText("110%");
+    await expect(spread).toHaveAttribute("data-page-span", "1");
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.waitForTimeout(150);
+    await expect(spread).toHaveAttribute("data-page-span", "1");
+    const mobileManualMetrics = await readMetrics();
+    expect(mobileManualMetrics.innerOverflow).toBeGreaterThan(0);
+    expect(mobileManualMetrics.documentOverflow).toBeLessThanOrEqual(0);
+
+    await fit.click();
+    await expect(zoomValue).toHaveText("100%");
+    const mobileFitMetrics = await readMetrics();
+    expect(mobileFitMetrics.innerOverflow).toBeLessThanOrEqual(1);
+    expect(mobileFitMetrics.documentOverflow).toBeLessThanOrEqual(0);
+
+    const storedSongAfter = await page.evaluate(() => localStorage.getItem("caderno.library.v1"));
+    expect(storedSongAfter).toBe(storedSongBefore);
+    expect(errors).toEqual([]);
+  });
+
   test("fase 22: grade de 16 células mantém a marca quando uma seção começa no meio do sistema", async ({ page }) => {
     const makeMeasures = (prefix, count) =>
       Array.from({ length: count }, (_, idx) => ({

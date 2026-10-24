@@ -1549,12 +1549,15 @@ body.clean .pdf-read { height: 100dvh; }
   width: 100%;
   box-sizing: border-box;
   display: flex;
-  justify-content: center;
+  justify-content: safe center;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
 }
 
 .reading-spread.is-single .paper.sheet {
-  width: min(100%, var(--sheet-target-width, 960px));
-  max-width: 960px;
+  flex: 0 0 var(--sheet-target-width, 960px);
+  width: var(--sheet-target-width, 960px);
+  max-width: none;
   margin: 0 auto;
 }
 
@@ -1578,6 +1581,34 @@ body.clean .pdf-read { height: 100dvh; }
 
 .reading-viewport .paper.sheet .lead {
   padding: calc(52 * var(--u)) calc(6.8 * var(--u)) calc(12 * var(--u)) calc(14 * var(--u));
+}
+
+.reading-viewport .paper.sheet .sheet-title {
+  top: calc(2 * var(--u));
+  left: calc(24 * var(--u));
+  right: calc(24 * var(--u));
+  height: calc(20 * var(--u));
+  font-size: calc(18 * var(--u));
+}
+
+.reading-viewport .paper.sheet .sheet-sub {
+  top: calc(26 * var(--u));
+  left: calc(3 * var(--u));
+  right: calc(8 * var(--u));
+  height: calc(18 * var(--u));
+  min-height: 0;
+  flex-wrap: nowrap;
+  font-size: calc(16 * var(--u));
+}
+
+.reading-viewport .paper.sheet .sheet-style,
+.reading-viewport .paper.sheet .sheet-composer {
+  max-width: calc(210 * var(--u));
+  min-width: 0;
+  overflow: hidden;
+  font-size: calc(16 * var(--u));
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .reading-viewport .paper.sheet.is-continuation .lead {
@@ -1635,6 +1666,35 @@ body.fullscreen-reading .reading-viewport {
   border: 1px solid #111;
   min-height: 44px;
   min-width: 44px;
+}
+
+.reading-zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.reading-zoom-controls .btn {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.reading-zoom-controls .reading-zoom-fit {
+  font-size: 14px;
+}
+
+.reading-zoom-value {
+  min-width: 52px;
+  color: #111;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.reading-zoom-fit[aria-pressed="true"] {
+  background: #111;
+  color: #fff;
 }
 
 .chart-page-caption {

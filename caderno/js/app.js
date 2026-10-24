@@ -47,6 +47,7 @@ import {
   findChartPageByMeasureId,
   resolveReadingLayoutProfile,
   resolveReadingPresentation,
+  updateReadingZoomPreferences,
 } from "./chart-pages.js";
 import {
   blankMeasure,
@@ -106,6 +107,11 @@ const state = {
   selectedDraftChord: null,
   draggedDraftChord: null,
   draftRepeatLiveAnnouncement: "",
+  readingPreferences: {
+    spreadMode: "auto",
+    zoomMode: "fit",
+    zoomPercent: 100,
+  },
 };
 
 const REPEAT_CYCLE = ["", "start", "end", "both"];
@@ -373,6 +379,17 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.target.matches?.("input, textarea, select")) return;
   const inPerformanceReading = state.route.name === "stage" || (state.route.name === "song" && state.clean);
+  if (
+    inPerformanceReading
+    && !event.ctrlKey
+    && !event.metaKey
+    && !event.altKey
+    && ["+", "=", "-", "0"].includes(event.key)
+  ) {
+    event.preventDefault();
+    setReadingZoom(event.key === "-" ? "decrease" : event.key === "0" ? "fit" : "increase");
+    return;
+  }
   if (inPerformanceReading && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
     event.preventDefault();
     stepPerformance(event.key === "ArrowRight" ? 1 : -1);
@@ -454,6 +471,22 @@ function restoreReadingAnchor(anchor) {
   align();
   if (typeof requestAnimationFrame === "function") requestAnimationFrame(align);
 }
+
+function setReadingZoom(command) {
+  const song = currentSong();
+  if (!isReadingChart(song) || !["decrease", "increase", "fit"].includes(command)) return;
+  const anchor = captureReadingAnchor();
+  const currentPresentation = getChartReadingPosition(song).presentation;
+  state.readingPreferences = updateReadingZoomPreferences(
+    state.readingPreferences,
+    command,
+    currentPresentation.zoomPercent
+  );
+  setReadingPageFromAnchor(song, anchor);
+  paintPaper();
+  restoreReadingAnchor(anchor);
+}
+
 window.addEventListener("beforeprint", () => {
   clearSheetFit(document.querySelector(".paper.sheet"));
   fitGlyphs();
@@ -853,6 +886,7 @@ const actions = {
   "stage-prev": () => stepPerformance(-1),
   "stage-next": () => stepPerformance(1),
   "stage-step": (element) => stepPerformance(Number(element.dataset.dir) || 1),
+  "reading-zoom": (element) => setReadingZoom(element.dataset.command),
   "toggle-clean": () => {
     const song = currentSong();
     if (state.route.name === "stage" && song?.pdfName) {
@@ -1202,6 +1236,7 @@ function resolveChartPresentation(totalPages, profile = resolveChartLayoutProfil
     totalPages,
     minSheetWidth: profile.minSheetWidth,
     horizontalChrome: state.route.name === "stage" || state.clean || state.fullscreen ? 16 : 36,
+    preferences: state.readingPreferences,
   });
 }
 
@@ -1337,7 +1372,7 @@ function chartReadingBar(song) {
   const items = setlist?.items || (song ? [{ songId: song.id }] : []);
   const pageOptions = performancePageOptions(song);
   const pages = getSongPageCount(song, pageOptions);
-  const { songIndex, pageIndex, spread } = getChartReadingPosition(song);
+  const { songIndex, pageIndex, presentation, spread } = getChartReadingPosition(song);
   const currentPos = { itemIndex: songIndex, page: pageIndex };
   const canPrev = canStepPerformance(currentPos, -1, { items, library: state.library, ...pageOptions });
   const canNext = canStepPerformance(currentPos, 1, { items, library: state.library, ...pageOptions });
@@ -1348,8 +1383,17 @@ function chartReadingBar(song) {
   const fallbackNote = state.fullscreen && state.fullscreenFallback
     ? `<span class="fullscreen-fallback-note" id="fullscreen-fallback-status" role="status">Modo janela (API de tela cheia indisponível)</span>`
     : "";
+  const zoomIsFit = state.readingPreferences.zoomMode === "fit";
+  const zoomAtMinimum = !zoomIsFit && presentation.zoomPercent <= 67;
+  const zoomAtMaximum = !zoomIsFit && presentation.zoomPercent >= 150;
   return `<div class="chart-reading-bar no-print" role="region" aria-label="Navegação de páginas da cifra">
     <button class="btn ghost" type="button" data-action="toggle-clean">${readLabel(song)}</button>
+    <div class="reading-zoom-controls" role="group" aria-label="Tamanho da cifra">
+      <button class="btn ghost" type="button" data-action="reading-zoom" data-command="decrease" aria-label="Diminuir cifra" ${zoomAtMinimum ? "disabled" : ""}>&minus;</button>
+      <output class="reading-zoom-value" id="reading-zoom-value" aria-live="polite">${presentation.zoomPercent}%</output>
+      <button class="btn ghost" type="button" data-action="reading-zoom" data-command="increase" aria-label="Aumentar cifra" ${zoomAtMaximum ? "disabled" : ""}>+</button>
+      <button class="btn ghost reading-zoom-fit" type="button" data-action="reading-zoom" data-command="fit" aria-pressed="${zoomIsFit ? "true" : "false"}">Ajustar</button>
+    </div>
     <button class="btn ghost" type="button" data-action="stage-step" data-dir="-1" aria-label="Página anterior" ${canPrev ? "" : "disabled"}>Anterior</button>
     <p class="chart-page-caption" id="chart-page-indicator" aria-live="polite">${esc(song.title)} · ${pageLabel}</p>
     <button class="btn ghost" type="button" data-action="stage-step" data-dir="1" aria-label="Próxima página" ${canNext ? "" : "disabled"}>Próxima</button>
