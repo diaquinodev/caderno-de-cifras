@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 import {
   canUseCompactMeasure,
   composeChartLayout,
+  composeReadingSpread,
   composeChartSystems,
   findChartPageByMeasureId,
   flattenChartMeasures,
   paginateChartSystems,
+  normalizeReadingSpreadPage,
   resolveReadingLayoutProfile,
   resolveReadingPresentation,
 } from "./chart-pages.js";
@@ -290,4 +292,29 @@ test("resolveReadingPresentation nunca devolve duas folhas maiores que a largura
     assert.equal(presentation.pageSpan, 1);
     assert.equal(presentation.fallbackReason, "spread-overflow");
   }
+});
+
+test("composeReadingSpread mantém ordem nas duplas inicial, intermediária e final", () => {
+  const pages = Array.from({ length: 6 }, (_, index) => ({
+    index: index + 1,
+    systemCount: 0,
+    systems: [],
+  }));
+
+  assert.deepEqual(composeReadingSpread(pages, 1, 2).visiblePages.map((page) => page.index), [1, 2]);
+  assert.deepEqual(composeReadingSpread(pages, 4, 2).visiblePages.map((page) => page.index), [3, 4]);
+  assert.deepEqual(composeReadingSpread(pages, 6, { pageSpan: 2 }).visiblePages.map((page) => page.index), [5, 6]);
+});
+
+test("composeReadingSpread preserva a última página ímpar e normaliza a troca 1↔2 folhas", () => {
+  const pages = Array.from({ length: 5 }, (_, index) => ({
+    index: index + 1,
+    systemCount: 0,
+    systems: [],
+  }));
+
+  assert.equal(normalizeReadingSpreadPage(2, 5, 2), 1);
+  assert.equal(normalizeReadingSpreadPage(5, 5, 2), 5);
+  assert.equal(normalizeReadingSpreadPage(2, 5, 1), 2);
+  assert.deepEqual(composeReadingSpread(pages, 5, 2).visiblePages.map((page) => page.index), [5]);
 });

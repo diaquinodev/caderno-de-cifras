@@ -67,6 +67,13 @@
  * @property {null | "forced-single" | "single-page" | "portrait" | "viewport-too-narrow" | "sheet-too-narrow" | "spread-overflow"} fallbackReason
  */
 
+/**
+ * @typedef {Object} ReadingSpread
+ * @property {number} firstPage
+ * @property {1 | 2} pageSpan
+ * @property {AdaptiveChartPage[]} visiblePages
+ */
+
 export const DEFAULT_MIN_SHEET_WIDTH = 420;
 export const DEFAULT_HORIZONTAL_CHROME = 36;
 export const DEFAULT_MAX_SHEET_WIDTH = 960;
@@ -352,6 +359,49 @@ export function resolveReadingPresentation(options = {}) {
     zoomPercent,
     sheetWidth: spreadSheetWidth,
     fallbackReason: null,
+  };
+}
+
+/**
+ * Normaliza a página ativa para o início da folha simples ou dupla.
+ *
+ * @param {number} [activePage]
+ * @param {number} [totalPages]
+ * @param {number | ReadingPresentation} [spanOrPresentation]
+ * @returns {number}
+ */
+export function normalizeReadingSpreadPage(activePage = 1, totalPages = 1, spanOrPresentation = 1) {
+  const rawSpan = typeof spanOrPresentation === "object" && spanOrPresentation !== null
+    ? spanOrPresentation.pageSpan
+    : spanOrPresentation;
+  const pageSpan = /** @type {1 | 2} */ (Math.min(2, positiveInteger(rawSpan, 1)));
+  const total = Math.max(1, positiveInteger(totalPages, 1));
+  const active = Math.min(total, positiveInteger(activePage, 1));
+  return Math.floor((active - 1) / pageSpan) * pageSpan + 1;
+}
+
+/**
+ * Agrupa páginas já compostas na ordem esquerda→direita. Quando o total é
+ * ímpar, a última dupla contém somente a página restante.
+ *
+ * @param {AdaptiveChartPage[]} pages
+ * @param {number} [activePage]
+ * @param {number | ReadingPresentation} [spanOrPresentation]
+ * @returns {ReadingSpread}
+ */
+export function composeReadingSpread(pages, activePage = 1, spanOrPresentation = 1) {
+  const safePages = Array.isArray(pages) && pages.length > 0
+    ? pages
+    : [{ index: 1, systemCount: 0, systems: [] }];
+  const rawSpan = typeof spanOrPresentation === "object" && spanOrPresentation !== null
+    ? spanOrPresentation.pageSpan
+    : spanOrPresentation;
+  const pageSpan = /** @type {1 | 2} */ (Math.min(2, positiveInteger(rawSpan, 1)));
+  const firstPage = normalizeReadingSpreadPage(activePage, safePages.length, pageSpan);
+  return {
+    firstPage,
+    pageSpan,
+    visiblePages: safePages.slice(firstPage - 1, firstPage - 1 + pageSpan),
   };
 }
 

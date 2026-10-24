@@ -1548,17 +1548,32 @@ body.clean .pdf-read { height: 100dvh; }
 .reading-spread {
   width: 100%;
   box-sizing: border-box;
-}
-
-.reading-spread {
   display: flex;
   justify-content: center;
 }
 
-.reading-spread .paper.sheet {
+.reading-spread.is-single .paper.sheet {
   width: min(100%, var(--sheet-target-width, 960px));
   max-width: 960px;
   margin: 0 auto;
+}
+
+.reading-spread.is-double {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, var(--sheet-target-width, 480px)));
+  gap: 16px;
+  justify-content: center;
+  align-items: start;
+}
+
+.reading-spread.is-double.is-incomplete {
+  grid-template-columns: minmax(0, var(--sheet-target-width, 480px));
+}
+
+.reading-spread.is-double .paper.sheet {
+  width: 100%;
+  max-width: var(--sheet-target-width, 680px);
+  margin: 0;
 }
 
 .reading-viewport .paper.sheet .lead {

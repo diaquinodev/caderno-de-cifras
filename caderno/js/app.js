@@ -43,6 +43,7 @@ import { analyzeSamples } from "./listen.js";
 import { inspectPdf, paintPdf, releasePdf } from "./pdfview.js";
 import {
   composeChartLayout,
+  composeReadingSpread,
   findChartPageByMeasureId,
   resolveReadingLayoutProfile,
   resolveReadingPresentation,
@@ -422,7 +423,7 @@ window.addEventListener("resize", () => {
 });
 
 function captureReadingAnchor() {
-  const bars = [...document.querySelectorAll("#paper-body .adaptive-bar")];
+  const bars = [...document.querySelectorAll("#chart-reading-spread .adaptive-bar")];
   const visibleBar = bars.find((bar) => {
     const rect = bar.getBoundingClientRect();
     return rect.bottom > 0 && rect.top < window.innerHeight;
@@ -444,10 +445,14 @@ function setReadingPageFromAnchor(song, anchor) {
 
 function restoreReadingAnchor(anchor) {
   if (!anchor?.measureId) return;
-  const bar = [...document.querySelectorAll("#paper-body .adaptive-bar")]
-    .find((item) => item.dataset.measureId === anchor.measureId);
-  if (!bar) return;
-  window.scrollBy(0, bar.getBoundingClientRect().top - anchor.viewportTop);
+  const align = () => {
+    const bar = [...document.querySelectorAll("#chart-reading-spread .adaptive-bar")]
+      .find((item) => item.dataset.measureId === anchor.measureId);
+    if (!bar) return;
+    window.scrollBy(0, bar.getBoundingClientRect().top - anchor.viewportTop);
+  };
+  align();
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(align);
 }
 window.addEventListener("beforeprint", () => {
   clearSheetFit(document.querySelector(".paper.sheet"));
@@ -1167,7 +1172,8 @@ function fitHeaderFields() {
  * @typedef {Object} ChartReadingPosition
  * @property {number} songIndex
  * @property {number} pageIndex
- * @property {import("./chart-pages.js").AdaptiveChartPage} activePage
+ * @property {import("./chart-pages.js").ReadingPresentation} presentation
+ * @property {import("./chart-pages.js").ReadingSpread} spread
  * @property {import("./chart-pages.js").ReadingLayoutProfile} profile
  * @property {import("./chart-pages.js").AdaptiveChartLayout} layout
  * @property {import("./chart-pages.js").AdaptiveChartPage[]} pages
@@ -1189,6 +1195,16 @@ function resolveChartLayoutProfile() {
   });
 }
 
+function resolveChartPresentation(totalPages, profile = resolveChartLayoutProfile()) {
+  return resolveReadingPresentation({
+    viewportWidth: typeof window !== "undefined" ? window.innerWidth : 1024,
+    viewportHeight: typeof window !== "undefined" ? window.innerHeight : 768,
+    totalPages,
+    minSheetWidth: profile.minSheetWidth,
+    horizontalChrome: state.route.name === "stage" || state.clean || state.fullscreen ? 16 : 36,
+  });
+}
+
 function getRuntimeChartPageCount(song) {
   if (!song) return 1;
   const sections = transposeSections(song.sections || [], song.key, state.previewKey);
@@ -1198,7 +1214,13 @@ function getRuntimeChartPageCount(song) {
 
 function getRuntimeChartPageSpan(song) {
   if (!song) return 1;
-  return 1;
+  const profile = resolveChartLayoutProfile();
+  const sections = transposeSections(song.sections || [], song.key, state.previewKey);
+  const totalPages = composeChartLayout(
+    { ...song, sections },
+    { systemCapacity: profile.systemCapacity }
+  ).pages.length;
+  return resolveChartPresentation(totalPages, profile).pageSpan;
 }
 
 function performancePageOptions(song) {
@@ -1223,13 +1245,14 @@ function getChartReadingPosition(song) {
     { systemCapacity: profile.systemCapacity }
   );
   const pages = layout.pages;
-  const pageIndex = Math.min(pages.length, Math.max(1, Number(state.stagePage) || 1));
-  const activePage = pages[pageIndex - 1] || pages[0];
+  const presentation = resolveChartPresentation(pages.length, profile);
+  const spread = composeReadingSpread(pages, state.stagePage || 1, presentation);
   const songIndex = state.route.name === "stage" ? Math.max(0, Number(state.stageIndex) || 0) : 0;
   return {
     songIndex,
-    pageIndex,
-    activePage,
+    pageIndex: spread.firstPage,
+    presentation,
+    spread,
     profile,
     layout,
     pages,
@@ -1314,11 +1337,14 @@ function chartReadingBar(song) {
   const items = setlist?.items || (song ? [{ songId: song.id }] : []);
   const pageOptions = performancePageOptions(song);
   const pages = getSongPageCount(song, pageOptions);
-  const { songIndex, pageIndex } = getChartReadingPosition(song);
+  const { songIndex, pageIndex, spread } = getChartReadingPosition(song);
   const currentPos = { itemIndex: songIndex, page: pageIndex };
   const canPrev = canStepPerformance(currentPos, -1, { items, library: state.library, ...pageOptions });
   const canNext = canStepPerformance(currentPos, 1, { items, library: state.library, ...pageOptions });
-  const pageLabel = `Página ${pageIndex} de ${pages}`;
+  const visibleIndexes = spread.visiblePages.map((page) => page.index);
+  const pageLabel = visibleIndexes.length > 1
+    ? `Páginas ${visibleIndexes[0]}–${visibleIndexes.at(-1)} de ${pages}`
+    : `Página ${pageIndex} de ${pages}`;
   const fallbackNote = state.fullscreen && state.fullscreenFallback
     ? `<span class="fullscreen-fallback-note" id="fullscreen-fallback-status" role="status">Modo janela (API de tela cheia indisponível)</span>`
     : "";
@@ -1369,15 +1395,8 @@ function paintPaper(focusId) {
   if (reading) {
     const spreadHost = /** @type {HTMLElement | null} */ (document.querySelector("#chart-reading-spread"));
     if (!spreadHost) return;
-    const { pageIndex, activePage, profile, layout, pages } = getChartReadingPosition(song);
+    const { pageIndex, presentation, spread, profile, layout, pages } = getChartReadingPosition(song);
     const totalPages = pages.length;
-    const presentation = resolveReadingPresentation({
-      viewportWidth: typeof window !== "undefined" ? window.innerWidth : 1024,
-      viewportHeight: typeof window !== "undefined" ? window.innerHeight : 768,
-      totalPages,
-      minSheetWidth: profile.minSheetWidth,
-      horizontalChrome: state.route.name === "stage" || state.clean || state.fullscreen ? 16 : 36,
-    });
     state.stagePage = pageIndex;
 
     const onStage = state.route.name === "stage";
@@ -1385,11 +1404,11 @@ function paintPaper(focusId) {
     const nextEntry = setlist?.items?.[state.stageIndex + 1];
     const nextSong = nextEntry ? findSong(state.library, nextEntry.songId) : null;
 
-    spreadHost.className = "reading-spread is-single";
-    spreadHost.dataset.pageSpan = "1";
+    spreadHost.className = `reading-spread ${spread.pageSpan === 2 ? "is-double" : "is-single"}${spread.visiblePages.length < spread.pageSpan ? " is-incomplete" : ""}`;
+    spreadHost.dataset.pageSpan = String(spread.pageSpan);
     spreadHost.dataset.firstPage = String(pageIndex);
     spreadHost.dataset.totalPages = String(totalPages);
-    spreadHost.dataset.visiblePages = String(pageIndex);
+    spreadHost.dataset.visiblePages = spread.visiblePages.map((page) => page.index).join(",");
     spreadHost.dataset.minSheetWidth = String(profile.minSheetWidth || 420);
     spreadHost.dataset.resolvedPageSpan = String(presentation.pageSpan);
     spreadHost.dataset.resolvedZoomPercent = String(presentation.zoomPercent);
@@ -1397,23 +1416,29 @@ function paintPaper(focusId) {
     spreadHost.dataset.resolvedFallback = presentation.fallbackReason || "none";
     spreadHost.dataset.density = layout.density;
     spreadHost.dataset.systemCapacity = String(layout.systemCapacity);
-    spreadHost.style.setProperty("--sheet-target-width", `${profile.usableSheetWidth}px`);
+    spreadHost.style.setProperty("--sheet-target-width", `${presentation.sheetWidth}px`);
 
-    const sheetId = onStage ? "stage-paper" : "clean-paper";
-    const continuation = activePage.index > 1;
-    const bodyHtml = renderAdaptiveReadingPage(activePage, layout, hasTime, beats, unit);
-    spreadHost.innerHTML = `<article class="paper sheet${continuation ? " is-continuation" : ""}" id="${sheetId}" data-page="${activePage.index}" data-total-pages="${totalPages}">
+    spreadHost.innerHTML = spread.visiblePages.map((activePage, spreadIndex) => {
+      const sheetId = onStage
+        ? (spreadIndex === 0 ? "stage-paper" : `stage-paper-${spreadIndex + 1}`)
+        : (spreadIndex === 0 ? "clean-paper" : `clean-paper-${spreadIndex + 1}`);
+      const bodyId = spreadIndex === 0 ? "paper-body" : `paper-body-${spreadIndex + 1}`;
+      const continuation = activePage.index > 1;
+      const isLastVisibleSheet = spreadIndex === spread.visiblePages.length - 1;
+      const bodyHtml = renderAdaptiveReadingPage(activePage, layout, hasTime, beats, unit);
+      return `<article class="paper sheet${continuation ? " is-continuation" : ""}" id="${sheetId}" data-page="${activePage.index}" data-total-pages="${totalPages}">
         <div class="lead">
           <h1 class="sheet-title">${esc(song.title)}${continuation ? ` · ${activePage.index}/${totalPages}` : ""}</h1>
           ${continuation ? "" : `<div class="sheet-sub">
             <p class="sheet-style">${song.style ? `(${esc(song.style)})` : ""}</p>
             <p class="sheet-composer">${esc(song.composer)}</p>
           </div>`}
-          <div id="paper-body" class="paper-body">${bodyHtml}</div>
+          <div id="${bodyId}" class="paper-body">${bodyHtml}</div>
           ${onStage && song.notes && activePage.index === totalPages ? `<p class="sheet-notes static">${esc(song.notes)}</p>` : ""}
-          ${onStage ? `<p class="hint">${nextSong ? `A seguir: ${esc(nextSong.title)} · ${esc(nextEntry?.key || nextSong.key)}` : "Última música da setlist."}</p>` : ""}
+          ${onStage && isLastVisibleSheet ? `<p class="hint">${nextSong ? `A seguir: ${esc(nextSong.title)} · ${esc(nextEntry?.key || nextSong.key)}` : "Última música da setlist."}</p>` : ""}
         </div>
       </article>`;
+    }).join("");
 
     const barHost = document.querySelector("#chart-reading-bar-host");
     if (barHost) barHost.innerHTML = chartReadingBar(song);
@@ -2560,6 +2585,8 @@ async function exportLibrary() {
 }
 
 function stepPerformance(direction) {
+  clearTimeout(resizeDebounce);
+  resizeReadingAnchor = null;
   const onStage = state.route.name === "stage";
   const setlist = onStage ? currentSetlist() : null;
   const song = currentSong();
