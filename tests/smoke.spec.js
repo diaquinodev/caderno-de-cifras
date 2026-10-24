@@ -2039,4 +2039,41 @@ Tom: C
 
     expect(errors).toEqual([]);
   });
+
+  test("fase 28: atalho universal Control+z desfaz alterações no rascunho de forma instantânea", async ({ page }) => {
+    const errors = await setupPage(page);
+
+    await gotoRoute(page, "#/musicas");
+
+    // Abre modal de colar cifra e carrega fixture
+    await page.click('[data-action="new-song"]');
+    await page.click('[data-action="open-paste"]');
+    await page.click('[data-action="load-fixture"][data-fixture-id="so-easy"]');
+    await page.click('[data-action="open-draft"]');
+    await expect(page.locator("#draft-title")).toBeVisible();
+
+    const measureBoxes = page.locator(".draft-measure-box");
+    const initialCount = await measureBoxes.count();
+
+    // Seleciona um acorde para dividir
+    const chordToken = measureBoxes.first().locator(".measure-chord-token").last();
+    await chordToken.click();
+    await page.locator('[data-action="draft-split-chord"]').click();
+    await expect(measureBoxes).toHaveCount(initialCount + 1);
+
+    // Pressiona Control+z para desfazer
+    await page.keyboard.press("Control+z");
+    await expect(measureBoxes).toHaveCount(initialCount);
+    await expect(page.locator("#toast")).toContainText("Ação desfeita");
+
+    // Testa também Meta+z (Mac)
+    await chordToken.click();
+    await page.locator('[data-action="draft-split-chord"]').click();
+    await expect(measureBoxes).toHaveCount(initialCount + 1);
+    await page.keyboard.press("Meta+z");
+    await expect(measureBoxes).toHaveCount(initialCount);
+
+    await page.click('[data-action="draft-cancel"]');
+    expect(errors).toEqual([]);
+  });
 });

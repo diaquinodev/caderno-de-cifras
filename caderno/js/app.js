@@ -378,6 +378,12 @@ document.addEventListener("keydown", (event) => {
     return;
   }
   if (event.target.matches?.("input, textarea, select")) return;
+  const isUndo = (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z";
+  if (isUndo && state.currentDraft) {
+    event.preventDefault();
+    handleDraftUndo();
+    return;
+  }
   const inPerformanceReading = state.route.name === "stage" || (state.route.name === "song" && state.clean);
   if (
     inPerformanceReading
@@ -2456,7 +2462,7 @@ function renderDraftModal() {
     </div>
     <div class="inline-actions draft-footer-actions" style="margin-top: 16px;">
       <button class="btn primary" type="button" data-action="draft-confirm" id="btn-draft-confirm">Confirmar e criar música</button>
-      <button class="btn ghost" type="button" data-action="draft-undo" id="btn-draft-undo" ${hasHistory ? "" : "disabled"}>↩ Desfazer</button>
+      <button class="btn ghost" type="button" data-action="draft-undo" id="btn-draft-undo" title="Desfazer (Ctrl+Z ou ⌘Z)" aria-keyshortcuts="Control+Z Meta+Z" ${hasHistory ? "" : "disabled"}>↩ Desfazer</button>
       <button class="btn ghost" type="button" data-action="draft-cancel">Cancelar rascunho</button>
     </div>
   </div>`);
