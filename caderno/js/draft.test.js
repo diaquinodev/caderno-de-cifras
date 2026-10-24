@@ -658,7 +658,7 @@ test("dismissRepeatCandidate: oculta sugestão ('Manter completo') mantendo comp
   assert.equal(detectRepeatCandidates(undone.draft).length, 1);
 });
 
-test("fase 21 (longRepeatedChart): expansão da cifra compactada equivale à sequência original e reduz páginas sem omitir conteúdo", () => {
+test("fase 21 (longRepeatedChart): expansão da cifra compactada equivale à sequência original e pagina sem omitir conteúdo", () => {
   const source = parseCifraSource(longRepeatedChart);
   let draft = suggestChart(source, { timeSignature: "4/4" });
   const uncompactedSong = convertDraftToSong(draft);
@@ -704,7 +704,14 @@ test("fase 21 (longRepeatedChart): expansão da cifra compactada equivale à seq
   const compactedMeasures = compactedSong.sections.reduce((acc, s) => acc + s.measures.length, 0);
   assert.ok(compactedMeasures < uncompactedMeasures, "Compactação deve reduzir compassos escritos");
 
-  const uncompactedPages = composeChartLayout(uncompactedSong, { systemCapacity: 5, density: "normal" }).pages.length;
-  const compactedPages = composeChartLayout(compactedSong, { systemCapacity: 5, density: "normal" }).pages.length;
-  assert.ok(compactedPages < uncompactedPages, "Compactação deve aumentar a densidade por página");
+  const compactedLayout = composeChartLayout(compactedSong, { systemCapacity: 5 });
+  const placedMeasures = compactedLayout.pages.flatMap((page) =>
+    page.systems.flatMap((system) => system.placements.map((placement) => placement.atom.measureId))
+  );
+  assert.deepEqual(
+    placedMeasures,
+    compactedSong.sections.flatMap((section) => section.measures.map((measure) => measure.id)),
+    "Paginação deve preservar cada compasso compactado exatamente uma vez"
+  );
+  assert.ok(compactedLayout.pages.every((page) => page.systemCount <= 5));
 });

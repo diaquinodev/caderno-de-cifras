@@ -1637,6 +1637,93 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     expect(errors).toEqual([]);
   });
 
+  test("fase 23: densidade por sistema preserva largura e legibilidade", async ({ page }) => {
+    const measures = Array.from({ length: 20 }, (_, index) => ({
+      id: `mixed-${index + 1}`,
+      chords: index >= 8 && index < 12 ? "D-7(9) A-7(9)" : "Cmaj7",
+      ending: "",
+      repeat: "",
+    }));
+    const mixedLibrary = {
+      version: 2,
+      pdfDocuments: [],
+      songs: [{
+        id: "song-system-density",
+        title: "Densidade por Sistema",
+        composer: "Prova sanitizada",
+        style: "",
+        key: "C",
+        tempo: 120,
+        timeSignature: "4/4",
+        barsPerRow: 4,
+        sections: [{ id: "section-a", label: "Parte A", measures }],
+      }],
+      playlists: [],
+      setlists: [],
+    };
+
+    const errors = await setupPage(page, { library: mixedLibrary, seedPdf: false });
+    for (const viewport of [
+      { width: 390, height: 844 },
+      { width: 768, height: 1024 },
+      { width: 1366, height: 768 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await gotoRoute(page, "#/musicas/song-system-density");
+      await page.click('[data-action="toggle-clean"]');
+
+      const spread = page.locator("#chart-reading-spread");
+      const systems = page.locator("#paper-body .adaptive-system");
+      await expect(spread).toHaveAttribute("data-density", "mixed");
+      await expect(systems).toHaveCount(3);
+      await expect(systems.nth(0)).toHaveAttribute("data-density", "compact");
+      await expect(systems.nth(0).locator(".bar")).toHaveCount(8);
+      await expect(systems.nth(1)).toHaveAttribute("data-density", "normal");
+      await expect(systems.nth(1).locator(".bar")).toHaveCount(4);
+      await expect(systems.nth(2)).toHaveAttribute("data-density", "compact");
+      await expect(systems.nth(2).locator(".bar")).toHaveCount(8);
+
+      const geometry = await systems.evaluateAll((rows) => rows.map((row) => {
+        const rowRect = row.getBoundingClientRect();
+        const bars = [...row.querySelectorAll(".bar")];
+        const widths = bars.map((bar) => bar.getBoundingClientRect().width);
+        const glyphScales = bars.flatMap((bar) => [...bar.querySelectorAll(".glyph")].map((glyph) => {
+          const naturalWidth = glyph.scrollWidth;
+          return naturalWidth ? glyph.getBoundingClientRect().width / naturalWidth : 1;
+        }));
+        const glyphsInside = bars.every((bar) => {
+          const barRect = bar.getBoundingClientRect();
+          return [...bar.querySelectorAll(".glyph")].every((glyph) => {
+            const glyphRect = glyph.getBoundingClientRect();
+            return glyphRect.left >= barRect.left - 1 && glyphRect.right <= barRect.right + 1;
+          });
+        });
+        return {
+          rowWidth: rowRect.width,
+          widths,
+          minGlyphScale: Math.min(...glyphScales),
+          glyphsInside,
+        };
+      }));
+
+      for (const [index, row] of geometry.entries()) {
+        expect(Math.max(...row.widths) - Math.min(...row.widths)).toBeLessThanOrEqual(1);
+        const expectedRatio = index === 1 ? 0.25 : 0.125;
+        for (const width of row.widths) expect(width / row.rowWidth).toBeCloseTo(expectedRatio, 2);
+        expect(row.minGlyphScale).toBeGreaterThanOrEqual(0.8);
+        expect(row.glyphsInside).toBe(true);
+      }
+      expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
+
+      if (viewport.width === 768) {
+        await spread.screenshot({ path: "tests/screenshots/fase23-tablet-densidade-por-sistema.png" });
+      }
+
+      await page.click('[data-action="toggle-clean"]');
+    }
+    expect(errors).toEqual([]);
+  });
+
   test("fase 20: interface de sugestão de repetições (aceitar, manter completo, expandir e desfazer) em celular, tablet e notebook", async ({ page }) => {
     const errors = await setupPage(page, { seedPdf: false });
 

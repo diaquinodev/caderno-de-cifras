@@ -19,6 +19,7 @@
 /**
  * @typedef {Object} ChartSystem
  * @property {number} index
+ * @property {"normal" | "compact"} density
  * @property {number} cellsUsed
  * @property {MeasurePlacement[]} placements
  */
@@ -32,8 +33,7 @@
 
 /**
  * @typedef {Object} AdaptiveChartLayout
- * @property {"normal" | "compact"} density
- * @property {boolean} compactEligible
+ * @property {"normal" | "compact" | "mixed"} density
  * @property {16} cellsPerSystem
  * @property {number} systemCapacity
  * @property {number} totalSystems
@@ -105,57 +105,66 @@ export function flattenChartMeasures(song) {
 }
 
 /**
- * Restringe a densidade compacta a compassos com no máximo dois acordes e
- * rótulos curtos o bastante para a futura célula visual. Não altera a fonte.
+ * Identifica um compasso simples o bastante para ocupar uma célula compacta.
+ * Repetições e casas permanecem em células normais para preservar legibilidade.
  *
- * @param {ChartMeasureAtom[]} atoms
+ * @param {ChartMeasureAtom} atom
  * @param {Object} [options]
  * @param {number} [options.chordTextLimit]
  * @param {number} [options.chordTokenLimit]
  * @returns {boolean}
  */
-export function canUseCompactDensity(atoms, options = {}) {
-  if (!Array.isArray(atoms) || atoms.length === 0) return false;
+export function canUseCompactMeasure(atom, options = {}) {
   const textLimit = positiveInteger(options.chordTextLimit, DEFAULT_COMPACT_CHORD_TEXT_LIMIT);
   const tokenLimit = positiveInteger(options.chordTokenLimit, DEFAULT_COMPACT_CHORD_TOKEN_LIMIT);
-
-  return atoms.every((atom) => {
-    const chordText = String(atom?.measure?.chords || "").trim();
-    const chordTokens = chordText ? chordText.split(/\s+/).filter(Boolean) : [];
-    return chordTokens.length <= 2 &&
-      chordText.length <= textLimit &&
-      chordTokens.every((token) => token.length <= tokenLimit);
-  });
+  const chordText = String(atom?.measure?.chords || "").trim();
+  const chordTokens = chordText ? chordText.split(/\s+/).filter(Boolean) : [];
+  const repeat = String(atom?.measure?.repeat || "").trim();
+  const ending = String(atom?.measure?.ending || "").trim();
+  return chordTokens.length === 1 &&
+    chordText.length <= textLimit &&
+    chordTokens[0].length <= tokenLimit &&
+    !repeat &&
+    !ending;
 }
 
 /**
- * Empacota compassos sequenciais em sistemas de células sem cortar compassos
- * nem reiniciar a linha quando começa uma nova seção.
+ * Empacota compassos sequenciais em sistemas uniformes. O compacto só é usado
+ * para blocos completos de oito compassos simples, sem seção intermediária.
  *
  * @param {ChartMeasureAtom[]} atoms
- * @param {"normal" | "compact"} [density]
+ * @param {Object} [options]
+ * @param {number} [options.chordTextLimit]
+ * @param {number} [options.chordTokenLimit]
  * @returns {ChartSystem[]}
  */
-export function composeChartSystems(atoms, density = "normal") {
-  const cellSpan = density === "compact" ? COMPACT_MEASURE_CELL_SPAN : NORMAL_MEASURE_CELL_SPAN;
+export function composeChartSystems(atoms, options = {}) {
   const safeAtoms = Array.isArray(atoms) ? atoms : [];
   const systems = [];
-  let placements = [];
-  let cellsUsed = 0;
+  let cursor = 0;
 
-  const flushSystem = () => {
-    if (placements.length === 0) return;
-    systems.push({ index: systems.length + 1, cellsUsed, placements });
-    placements = [];
-    cellsUsed = 0;
-  };
-
-  for (const atom of safeAtoms) {
-    if (placements.length > 0 && cellsUsed + cellSpan > DEFAULT_CELLS_PER_SYSTEM) flushSystem();
-    placements.push({ atom, cellStart: cellsUsed, cellSpan });
-    cellsUsed += cellSpan;
+  while (cursor < safeAtoms.length) {
+    const compactCandidate = safeAtoms.slice(cursor, cursor + 8);
+    const canCompact = compactCandidate.length === 8 &&
+      compactCandidate.every((atom, index) =>
+        canUseCompactMeasure(atom, options) && (index === 0 || !atom.startsSection)
+      );
+    const density = canCompact ? "compact" : "normal";
+    const cellSpan = canCompact ? COMPACT_MEASURE_CELL_SPAN : NORMAL_MEASURE_CELL_SPAN;
+    const systemAtoms = safeAtoms.slice(cursor, cursor + (canCompact ? 8 : 4));
+    const placements = systemAtoms.map((atom, index) => ({
+      atom,
+      cellStart: index * cellSpan,
+      cellSpan,
+    }));
+    systems.push({
+      index: systems.length + 1,
+      density,
+      cellsUsed: placements.length * cellSpan,
+      placements,
+    });
+    cursor += systemAtoms.length;
   }
-  flushSystem();
 
   return systems;
 }
@@ -188,14 +197,13 @@ export function paginateChartSystems(systems, profile = {}) {
 }
 
 /**
- * Compõe os candidatos normal e compacto e escolhe a densidade que reduz o
- * número de páginas. O modo normal vence empates para preservar conforto.
+ * Compõe uma única sequência de sistemas cuja densidade é decidida localmente
+ * pelas regras de legibilidade, sem usar a redução de páginas como critério.
  *
  * @param {any} song
  * @param {Object} [profile]
  * @param {number} [profile.systemCapacity]
  * @param {number} [profile.maxSystemsPerPage]
- * @param {"auto" | "normal" | "compact"} [profile.density]
  * @param {number} [profile.compactChordTextLimit]
  * @param {number} [profile.compactChordTokenLimit]
  * @returns {AdaptiveChartLayout}
@@ -210,31 +218,16 @@ export function composeChartLayout(song, profile = {}) {
     positiveInteger(profile.systemCapacity, maxSystemsPerPage)
   );
   const atoms = flattenChartMeasures(song);
-  const compactEligible = canUseCompactDensity(atoms, {
+  const systems = composeChartSystems(atoms, {
     chordTextLimit: profile.compactChordTextLimit,
     chordTokenLimit: profile.compactChordTokenLimit,
   });
-  const normalSystems = composeChartSystems(atoms, "normal");
-  const normalPages = paginateChartSystems(normalSystems, { systemCapacity, maxSystemsPerPage });
-  const requestedDensity = ["normal", "compact"].includes(profile.density) ? profile.density : "auto";
-
-  let density = "normal";
-  let systems = normalSystems;
-  let pages = normalPages;
-
-  if (compactEligible && requestedDensity !== "normal") {
-    const compactSystems = composeChartSystems(atoms, "compact");
-    const compactPages = paginateChartSystems(compactSystems, { systemCapacity, maxSystemsPerPage });
-    if (requestedDensity === "compact" || compactPages.length < normalPages.length) {
-      density = "compact";
-      systems = compactSystems;
-      pages = compactPages;
-    }
-  }
+  const pages = paginateChartSystems(systems, { systemCapacity, maxSystemsPerPage });
+  const densities = new Set(systems.map((system) => system.density));
+  const density = densities.size > 1 ? "mixed" : (systems[0]?.density || "normal");
 
   return {
     density,
-    compactEligible,
     cellsPerSystem: DEFAULT_CELLS_PER_SYSTEM,
     systemCapacity,
     totalSystems: systems.length,
