@@ -1446,7 +1446,7 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     expect(errors).toEqual([]);
   });
 
-  test("fase 24: leitor usa uma superfície, preserva a âncora no resize e mantém tela cheia", async ({ page }) => {
+  test("fase 26: spread adaptativo preserva ordem, última ímpar, âncora e tela cheia", async ({ page }) => {
     const makeMeasures = (prefix, count) =>
       Array.from({ length: count }, (_, idx) => ({
         id: `${prefix}-${idx + 1}`,
@@ -1552,19 +1552,40 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
     await expect(indicator).toContainText("Página 2 de 3");
     await expect(spread.locator(".paper.sheet")).toHaveCount(1);
 
-    // 4. Tablet e notebooks usam uma folha larga sem overflow horizontal
+    // 4. A troca real 1↔2 folhas preserva o compasso da página 2; ao voltar
+    // para 1-up, preserva o primeiro compasso visível da folha esquerda.
+    await page.locator('[data-measure-id="B-1"]').evaluate((bar) => bar.scrollIntoView({ block: "start" }));
+    const pageTwoTop = await page.locator('[data-measure-id="B-1"]').evaluate((bar) => bar.getBoundingClientRect().top);
+    await page.setViewportSize({ width: 1366, height: 768 });
+    await page.waitForTimeout(150);
+    await expect(spread).toHaveAttribute("data-visible-pages", "1,2");
+    await expect(page.locator('[data-measure-id="B-1"]')).toHaveCount(1);
+    const pageTwoTopInSpread = await page.locator('[data-measure-id="B-1"]').evaluate((bar) => bar.getBoundingClientRect().top);
+    expect(Math.abs(pageTwoTopInSpread - pageTwoTop)).toBeLessThanOrEqual(2);
+
+    await page.locator('[data-measure-id="A-1"]').evaluate((bar) => bar.scrollIntoView({ block: "start" }));
+    const leftPageTop = await page.locator('[data-measure-id="A-1"]').evaluate((bar) => bar.getBoundingClientRect().top);
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.waitForTimeout(150);
+    await expect(spread).toHaveAttribute("data-visible-pages", "1");
+    await expect(page.locator('[data-measure-id="A-1"]')).toHaveCount(1);
+    const leftPageTopAfterFallback = await page.locator('[data-measure-id="A-1"]').evaluate((bar) => bar.getBoundingClientRect().top);
+    expect(leftPageTop).toBeGreaterThanOrEqual(0);
+    expect(leftPageTop).toBeLessThan(768);
+    expect(leftPageTopAfterFallback).toBeGreaterThanOrEqual(0);
+    expect(leftPageTopAfterFallback).toBeLessThan(768);
+
+    // 5. Tablet usa uma folha; notebooks largos mostram duas sem overflow.
     for (const vp of [
       { width: 1024, height: 768 },
       { width: 1280, height: 640 }, // viewport CSS aproximado de 1920×1080 com Chrome em 150%
       { width: 1366, height: 768 },
       { width: 1440, height: 900 },
     ]) {
+      const expectedSpan = vp.width >= 1200 ? "2" : "1";
       await page.setViewportSize(vp);
-      await expect(spread).toHaveAttribute("data-page-span", "1");
-      await expect(spread).toHaveAttribute(
-        "data-resolved-page-span",
-        vp.width >= 1200 ? "2" : "1"
-      );
+      await expect(spread).toHaveAttribute("data-page-span", expectedSpan);
+      await expect(spread).toHaveAttribute("data-resolved-page-span", expectedSpan);
       const metrics = await page.evaluate(() => {
         const sheets = [...document.querySelectorAll("#chart-reading-spread .paper.sheet")];
         const minSheetWidth = Number(document.querySelector("#chart-reading-spread")?.getAttribute("data-min-sheet-width") || 420);
@@ -1576,12 +1597,51 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
           overflowX: document.documentElement.scrollWidth - window.innerWidth,
         };
       });
-      expect(metrics.sheetCount).toBe(1);
+      expect(metrics.sheetCount).toBe(Number(expectedSpan));
       expect(metrics.minRenderedWidth).toBeGreaterThanOrEqual(metrics.minSheetWidth - 1);
       expect(metrics.overflowX).toBeLessThanOrEqual(0);
     }
 
-    // 5. Tela cheia no modo palco com fallback claro quando a API do navegador não está disponível e saída com Esc
+    // 6. Transpor em 2-up preserva o primeiro compasso visível e sua altura.
+    // A altura menor deixa margem de rolagem abaixo da âncora; no fim físico do
+    // documento o navegador não consegue preservar a coordenada por causa do clamp.
+    await page.setViewportSize({ width: 1366, height: 600 });
+    await page.waitForTimeout(150);
+    await expect(spread).toHaveAttribute("data-page-span", "2");
+    await page.locator('[data-measure-id="A-5"]').evaluate((bar) => bar.scrollIntoView({ block: "start" }));
+    const transposeAnchor = await page.evaluate(() => {
+      const bar = [...document.querySelectorAll("#chart-reading-spread .adaptive-bar")].find((item) => {
+        const rect = item.getBoundingClientRect();
+        return rect.bottom > 0 && rect.top < window.innerHeight;
+      });
+      return {
+        id: bar?.getAttribute("data-measure-id") || "",
+        top: bar?.getBoundingClientRect().top || 0,
+      };
+    });
+    expect(transposeAnchor.id).toBeTruthy();
+    await page.locator("select[data-preview-key]").evaluate((select) => {
+      select.value = "D";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(spread).toHaveAttribute("data-visible-pages", "1,2");
+    const transposedAnchor = page.locator(`[data-measure-id="${transposeAnchor.id}"]`);
+    await expect(transposedAnchor).toHaveCount(1);
+    const transposeAnchorTopAfter = await transposedAnchor.evaluate((bar) => bar.getBoundingClientRect().top);
+    expect(Math.abs(transposeAnchorTopAfter - transposeAnchor.top)).toBeLessThanOrEqual(2);
+
+    // 7. No notebook, avançar percorre a dupla 1–2 e preserva a página 3 ímpar.
+    await expect(spread).toHaveAttribute("data-visible-pages", "1,2");
+    await expect(indicator).toContainText("Páginas 1–2 de 3");
+    await page.keyboard.press("ArrowRight");
+    await expect(spread).toHaveAttribute("data-visible-pages", "3");
+    await expect(spread.locator(".paper.sheet")).toHaveCount(1);
+    await expect(indicator).toContainText("Página 3 de 3");
+    await page.keyboard.press("ArrowLeft");
+    await expect(spread).toHaveAttribute("data-visible-pages", "1,2");
+
+    // 8. Tela cheia no modo palco com fallback claro quando a API do navegador não está disponível e saída com Esc
     await gotoRoute(page, "#/setlists/setlist-spread/palco");
     await expect(page.locator(".stage-bar")).toBeVisible();
 

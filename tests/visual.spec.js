@@ -155,8 +155,16 @@ test.describe("Caderno de Cifras - Provas Visuais Responsivas", () => {
         await expect(spread).toBeVisible();
         await expect(indicator).toBeVisible();
 
-        const expectedSpan = "1";
+        const expectedSpan = vp.width >= 1200 ? "2" : "1";
         await expect(spread).toHaveAttribute("data-page-span", expectedSpan);
+
+        if (vp.name === "tablet-landscape" || vp.name === "desktop-wide") {
+          await expect(page.locator("#toast")).toBeHidden({ timeout: 4000 });
+          await page.screenshot({
+            path: path.join(screenshotDir, `fase26-${vp.name}-spread-adaptativo.png`),
+            fullPage: false,
+          });
+        }
 
         await page.screenshot({
           path: path.join(screenshotDir, `fase21-${vp.name}-3-leitura-paginada-p1.png`),
@@ -171,8 +179,9 @@ test.describe("Caderno de Cifras - Provas Visuais Responsivas", () => {
         for (let step = 1; step <= maxSteps; step += 1) {
           const metrics = await page.evaluate(() => {
             const lines = [...document.querySelectorAll("#chart-reading-spread .staff-line")];
-            const sheet = document.querySelector("#chart-reading-spread .paper.sheet")?.getBoundingClientRect();
-            const allLinesInsideSheet = Boolean(sheet) && lines.every((l) => {
+            const allLinesInsideSheet = lines.every((l) => {
+              const sheet = l.closest(".paper.sheet")?.getBoundingClientRect();
+              if (!sheet) return false;
               const r = l.getBoundingClientRect();
               return r.left >= sheet.left - 1 && r.right <= sheet.right + 1 && r.height >= 20;
             });
