@@ -17,7 +17,9 @@ import {
   createDraftHistory,
   pushDraftHistoryState,
   undoDraftHistoryState,
+  createDraftFromSong,
   convertDraftToSong,
+  applyDraftToSong,
   validateDraftForConfirmation,
   getMeasureRepeatSignature,
   detectSectionRepeatCandidates,
@@ -443,6 +445,134 @@ e|---5---|
   assert.ok(song.notes.includes("[Tablatura - Tab - Intro]"));
   assert.ok(song.notes.includes("e|---5---|"));
   assert.ok(song.sourceSnapshot !== null, "Deve reter o snapshot da fonte");
+});
+
+test("createDraftFromSong: reabre exatamente a estrutura salva sem reaplicar heurísticas", () => {
+  const song = {
+    id: "song-1",
+    title: "Tema salvo",
+    composer: "Compositora",
+    key: "Eb",
+    tempo: 96,
+    timeSignature: "4/4",
+    barsPerRow: 8,
+    sections: [{
+      id: "section-a",
+      label: "Intro",
+      measures: [
+        { id: "measure-1", chords: "Eb7M Gm7", repeat: "start", ending: "1", annotation: "Breque" },
+        { id: "measure-2", chords: "Ab7M", repeat: "end", ending: "", annotation: "" },
+      ],
+    }],
+  };
+
+  const draft = createDraftFromSong(song);
+
+  assert.equal(draft.sourceId, "song-1");
+  assert.equal(draft.sourceSnapshot, null);
+  assert.equal(draft.sections[0].id, "section-a");
+  assert.equal(draft.sections[0].measures[0].id, "measure-1");
+  assert.equal(draft.sections[0].measures[0].annotation, "Breque");
+  assert.deepEqual(draft.sections[0].measures[0].sourceChords, [
+    { raw: "Eb7M", normalized: "Eb7M" },
+    { raw: "Gm7", normalized: "Gm7" },
+  ]);
+  assert.equal(evaluateMeasureBeats(draft.sections[0].measures[1], draft.timeSignature).summaryLabel, "4 tempos");
+});
+
+test("applyDraftToSong: atualiza a mesma Song e preserva identidade, anexos e metadados externos", () => {
+  const sourceSnapshot = { metadata: { title: "Original" }, blocks: [], allChords: [], exclusions: [] };
+  const song = {
+    id: "song-1",
+    title: "Tema salvo",
+    composer: "Compositora",
+    style: "Soul",
+    key: "C",
+    tempo: 90,
+    timeSignature: "4/4",
+    barsPerRow: 4,
+    notes: "Notas privadas",
+    videoUrl: "https://example.com/video",
+    pdfRef: { documentId: "pdf-1", firstPage: 2, lastPage: 3 },
+    pdfName: "songbook.pdf",
+    pdfPages: 2,
+    sourceSnapshot,
+    sections: [{ id: "section-a", label: "A", measures: [{ id: "measure-1", chords: "C7", annotation: "" }] }],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-02T00:00:00.000Z",
+  };
+  const draft = createDraftFromSong(song);
+  const editedDraft = {
+    ...draft,
+    title: "Tema revisado",
+    key: "D",
+    sections: draft.sections.map((section) => ({
+      ...section,
+      measures: section.measures.map((measure) => ({
+        ...measure,
+        chords: "D7",
+        annotation: "Convenção",
+        sourceChords: [{ raw: "D7", normalized: "D7" }],
+      })),
+    })),
+  };
+  const before = structuredClone(song);
+
+  const updated = applyDraftToSong(editedDraft, song, { updatedAt: "2026-02-01T00:00:00.000Z" });
+
+  assert.deepEqual(song, before, "aplicação não deve mutar a Song de entrada");
+  assert.equal(updated.id, "song-1");
+  assert.equal(updated.createdAt, song.createdAt);
+  assert.equal(updated.updatedAt, "2026-02-01T00:00:00.000Z");
+  assert.equal(updated.title, "Tema revisado");
+  assert.equal(updated.key, "D");
+  assert.equal(updated.sections[0].id, "section-a");
+  assert.equal(updated.sections[0].measures[0].id, "measure-1");
+  assert.equal(updated.sections[0].measures[0].chords, "D7");
+  assert.equal(updated.sections[0].measures[0].annotation, "Convenção");
+  assert.equal(updated.style, "Soul");
+  assert.equal(updated.notes, "Notas privadas");
+  assert.equal(updated.videoUrl, "https://example.com/video");
+  assert.deepEqual(updated.pdfRef, song.pdfRef);
+  assert.equal(updated.sourceSnapshot, sourceSnapshot);
+});
+
+test("round-trip Song ↔ ImportDraft é fiel e convergente inclusive sem fórmula de compasso", () => {
+  const song = {
+    id: "song-round-trip",
+    title: "Tema legado",
+    composer: "Compositor",
+    style: "Jazz",
+    key: "F",
+    tempo: 110,
+    timeSignature: "",
+    barsPerRow: 4,
+    notes: "Manter estas notas",
+    videoUrl: "https://example.com/watch",
+    pdfRef: { documentId: "pdf-round-trip", firstPage: 1, lastPage: 2 },
+    pdfName: "tema.pdf",
+    pdfPages: 2,
+    sourceSnapshot: null,
+    sections: [{
+      id: "section-round-trip",
+      label: "Final",
+      measures: [{
+        id: "measure-round-trip",
+        chords: "F7M C7",
+        repeat: "both",
+        ending: "2",
+        annotation: "Breque final",
+      }],
+    }],
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-02T00:00:00.000Z",
+  };
+
+  const first = applyDraftToSong(createDraftFromSong(song), song, { updatedAt: song.updatedAt });
+  const second = applyDraftToSong(createDraftFromSong(first), first, { updatedAt: first.updatedAt });
+
+  assert.deepEqual(first, song);
+  assert.deepEqual(second, first);
 });
 
 test("validateDraftForConfirmation: recusa rascunho sem fórmula de compasso e sem título", () => {

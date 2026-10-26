@@ -16,6 +16,7 @@ import { uid, blankSong } from "./store.js";
  * @property {string} chords
  * @property {string} [repeat]
  * @property {string} [ending]
+ * @property {string} [annotation]
  * @property {SourceChord[]} [sourceChords]
  */
 
@@ -50,7 +51,7 @@ import { uid, blankSong } from "./store.js";
  * @property {DraftSection[]} sections
  * @property {DraftWarning[]} warnings
  * @property {SourceExclusion[]} exclusions
- * @property {CifraSource} sourceSnapshot
+ * @property {CifraSource | null} sourceSnapshot
  * @property {RepeatCompaction[]} [repeatCompactions]
  * @property {string[]} [dismissedRepeatCandidateIds]
  */
@@ -417,6 +418,54 @@ export function suggestChart(sourceInput, options = {}) {
     warnings,
     exclusions: [...(source.exclusions || [])],
     sourceSnapshot: source,
+    repeatCompactions: [],
+    dismissedRepeatCandidateIds: [],
+  };
+
+  return syncDraftMeasureWarnings(draft);
+}
+
+/**
+ * Cria uma sessão estrutural temporária a partir da música salva.
+ * A Song é a autoridade: não reaplica heurísticas da fonte literal.
+ *
+ * @param {import("./store.js").Song} song
+ * @returns {ImportDraft}
+ */
+export function createDraftFromSong(song) {
+  const sections = (Array.isArray(song?.sections) ? song.sections : []).map((section) => ({
+    id: section.id || uid(),
+    label: section.label || "A",
+    kind: "chords",
+    measures: (Array.isArray(section.measures) ? section.measures : []).map((measure) => {
+      const chords = String(measure?.chords || "").trim();
+      return {
+        id: measure.id || uid(),
+        chords,
+        repeat: measure.repeat || "",
+        ending: measure.ending || "",
+        annotation: measure.annotation || "",
+        sourceChords: chords
+          ? chords.split(/\s+/).map((chord) => ({ raw: chord, normalized: chord }))
+          : [],
+      };
+    }),
+  }));
+
+  const draft = {
+    id: uid(),
+    sourceId: song?.id || uid(),
+    title: song?.title || "Sem título",
+    artist: song?.composer || "",
+    composer: song?.composer || "",
+    key: normalizeKey(song?.key) || "C",
+    timeSignature: song?.timeSignature || "",
+    tempo: Number(song?.tempo) || 120,
+    barsPerRow: Number(song?.barsPerRow) || 4,
+    sections,
+    warnings: [],
+    exclusions: [],
+    sourceSnapshot: null,
     repeatCompactions: [],
     dismissedRepeatCandidateIds: [],
   };
@@ -963,6 +1012,46 @@ export function undoDraftHistoryState(history, currentDraft) {
   };
 }
 
+function materializeDraftSections(draft, preserveIds = false) {
+  const base = blankSong();
+  const chordSections = draft.sections.filter((s) => s.kind === "chords" || s.measures.length > 0);
+  const compactions = Array.isArray(draft.repeatCompactions) ? draft.repeatCompactions : [];
+
+  return chordSections.length > 0
+    ? chordSections.map((s) => {
+        const secCompactions = compactions.filter((c) => c && c.sectionId === s.id);
+        const hiddenIds = new Set(secCompactions.flatMap((c) => c.hiddenMeasureIds || []));
+        const startIds = new Set(secCompactions.map((c) => c.keptMeasureIds?.[0]).filter(Boolean));
+        const endIds = new Set(secCompactions.map((c) => c.keptMeasureIds?.at(-1)).filter(Boolean));
+
+        const visibleMeasures = s.measures.filter((m) => !hiddenIds.has(m.id));
+        return {
+          id: preserveIds && s.id ? s.id : uid(),
+          label: s.label || "A",
+          measures: visibleMeasures.map((m) => {
+            let repeat = m.repeat || "";
+            const isStart = startIds.has(m.id);
+            const isEnd = endIds.has(m.id);
+            if (isStart && isEnd) {
+              repeat = "both";
+            } else if (isStart) {
+              repeat = repeat === "end" || repeat === "both" ? "both" : "start";
+            } else if (isEnd) {
+              repeat = repeat === "start" || repeat === "both" ? "both" : "end";
+            }
+            return {
+              id: preserveIds && m.id ? m.id : uid(),
+              chords: m.chords || "",
+              repeat,
+              ending: m.ending || "",
+              annotation: m.annotation || "",
+            };
+          }),
+        };
+      })
+    : base.sections;
+}
+
 /**
  * Converte um ImportDraft em uma Song válida e estruturada no modelo v2.
  * Somente deve ser chamada após confirmação do usuário.
@@ -979,41 +1068,7 @@ export function convertDraftToSong(draft) {
     .map((s) => `[Tablatura - ${s.label}]:\n${s.tabContent}`)
     .join("\n\n");
 
-  const chordSections = draft.sections.filter((s) => s.kind === "chords" || s.measures.length > 0);
-  const compactions = Array.isArray(draft.repeatCompactions) ? draft.repeatCompactions : [];
-
-  const finalSections = chordSections.length > 0
-    ? chordSections.map((s) => {
-        const secCompactions = compactions.filter((c) => c && c.sectionId === s.id);
-        const hiddenIds = new Set(secCompactions.flatMap((c) => c.hiddenMeasureIds || []));
-        const startIds = new Set(secCompactions.map((c) => c.keptMeasureIds?.[0]).filter(Boolean));
-        const endIds = new Set(secCompactions.map((c) => c.keptMeasureIds?.at(-1)).filter(Boolean));
-
-        const visibleMeasures = s.measures.filter((m) => !hiddenIds.has(m.id));
-        return {
-          id: uid(),
-          label: s.label || "A",
-          measures: visibleMeasures.map((m) => {
-            let repeat = m.repeat || "";
-            const isStart = startIds.has(m.id);
-            const isEnd = endIds.has(m.id);
-            if (isStart && isEnd) {
-              repeat = "both";
-            } else if (isStart) {
-              repeat = repeat === "end" || repeat === "both" ? "both" : "start";
-            } else if (isEnd) {
-              repeat = repeat === "start" || repeat === "both" ? "both" : "end";
-            }
-            return {
-              id: uid(),
-              chords: m.chords || "",
-              repeat,
-              ending: m.ending || "",
-            };
-          }),
-        };
-      })
-    : base.sections;
+  const finalSections = materializeDraftSections(draft);
 
   return {
     ...base,
@@ -1029,6 +1084,28 @@ export function convertDraftToSong(draft) {
     sections: finalSections,
     createdAt: now,
     updatedAt: now,
+  };
+}
+
+/**
+ * Aplica uma sessão estrutural sobre a mesma música, sem alterar sua identidade ou anexos.
+ *
+ * @param {ImportDraft} draft
+ * @param {import("./store.js").Song} song
+ * @param {{ updatedAt?: string }} [options]
+ * @returns {import("./store.js").Song}
+ */
+export function applyDraftToSong(draft, song, options = {}) {
+  return {
+    ...song,
+    title: draft.title || "Sem título",
+    composer: draft.composer || draft.artist || "",
+    key: normalizeKey(draft.key) || "C",
+    tempo: Number(draft.tempo) || 120,
+    timeSignature: draft.timeSignature || "",
+    barsPerRow: Number(draft.barsPerRow) || 4,
+    sections: materializeDraftSections(draft, true),
+    updatedAt: options.updatedAt || new Date().toISOString(),
   };
 }
 
