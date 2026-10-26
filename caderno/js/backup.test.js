@@ -55,6 +55,36 @@ test("createBackupV2 exporta bytes uma unica vez por documentId e preserva todas
   assert.equal(backup.pdfDocuments[0].data, bufferToBase64(samplePdf));
 });
 
+test("backup v2 preserva anotacao por compasso na exportacao e restauracao", async () => {
+  const library = normalizeLibrary({
+    version: 2,
+    pdfDocuments: [],
+    songs: [{
+      id: "song_annotated",
+      title: "Tema com breque",
+      sections: [{
+        id: "section_a",
+        label: "A",
+        measures: [{ id: "measure_1", chords: "C7", annotation: "Breque com metais" }],
+      }],
+    }],
+    playlists: [],
+    setlists: [],
+  });
+
+  const backup = await createBackupV2(library, async () => null);
+  const parsed = parseBackupData(JSON.stringify(backup));
+  const restored = await executeRestore(
+    normalizeLibrary({ version: 2, pdfDocuments: [], songs: [], playlists: [], setlists: [] }),
+    JSON.stringify(backup),
+    { mode: "replace", savePdfRecord: async () => {} }
+  );
+
+  assert.equal(backup.library.songs[0].sections[0].measures[0].annotation, "Breque com metais");
+  assert.equal(parsed.library.songs[0].sections[0].measures[0].annotation, "Breque com metais");
+  assert.equal(restored.library.songs[0].sections[0].measures[0].annotation, "Breque com metais");
+});
+
 test("parseBackupData aceita backup v1 legado e converte para v2", () => {
   const legacyV1 = {
     version: 1,

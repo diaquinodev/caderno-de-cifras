@@ -35,6 +35,32 @@ test("blankSong possui valores padrao corretos e campos v2", () => {
   assert.equal(song.pdfRef, null);
   assert.equal(song.sourceSnapshot, null);
   assert.equal(song.sections.length, 1);
+  assert.equal(song.sections[0].measures[0].annotation, "");
+});
+
+test("normalizeSong normaliza anotacao curta por compasso de forma idempotente", () => {
+  const annotation = "  Convenção\ncom   metais " + "!".repeat(40);
+  const firstPass = normalizeSong({
+    title: "Tema anotado",
+    sections: [{
+      label: "A",
+      measures: [
+        { id: "m1", chords: "C7", annotation },
+        { id: "m2", chords: "F7" },
+      ],
+    }],
+  });
+
+  assert.equal(firstPass.sections[0].measures[0].annotation, "Convenção com metais " + "!".repeat(19));
+  assert.equal(firstPass.sections[0].measures[0].annotation.length, 40);
+  assert.equal(firstPass.sections[0].measures[1].annotation, "");
+  assert.deepEqual(normalizeSong(firstPass), firstPass);
+
+  const unicode = normalizeSong({
+    sections: [{ measures: [{ chords: "C7", annotation: "a".repeat(39) + "🎵" }] }],
+  });
+  assert.equal(unicode.sections[0].measures[0].annotation, "a".repeat(39) + "🎵");
+  assert.equal(Array.from(unicode.sections[0].measures[0].annotation).length, 40);
 });
 
 test("normalizeSong aceita timeSignature vazia explicitamente e nao forca 4/4", () => {
