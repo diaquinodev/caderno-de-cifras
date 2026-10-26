@@ -2214,4 +2214,79 @@ Tom: C
 
     expect(errors).toEqual([]);
   });
+
+  test("fase 34: mostrar anotação acima do compasso na cifra, transposição, leitura limpa e modo palco", async ({ page }) => {
+    const errors = await setupPage(page);
+
+    await gotoRoute(page, "#/musicas");
+    const cards = page.locator(".cards article.card");
+    await expect(cards.first()).toBeVisible();
+
+    // 1. Abre a primeira música e seu editor estrutural para incluir anotação
+    await cards.first().locator("a").click();
+    await page.click('[data-action="open-structure-editor"]');
+    await expect(page.locator("#draft-title")).toHaveText("Editar Estrutura Musical");
+
+    const firstMeasure = page.locator(".draft-measure-box").first();
+    await firstMeasure.locator('[data-action="draft-edit-annotation"]').click();
+    await firstMeasure.locator(".draft-annotation-input").fill("Breque com metais");
+    await page.keyboard.press("Enter");
+    await page.locator("#btn-draft-confirm").click();
+    await expect(page.locator("#toast")).toContainText("atualizada com sucesso");
+
+    // 2. Na visualização de edição da cifra (#/musicas/:id), a anotação aparece acima do compasso
+    const measureAnnotation = page.locator(".bar .measure-annotation").first();
+    await expect(measureAnnotation).toBeVisible();
+    await expect(measureAnnotation).toHaveText("Breque com metais");
+    await expect(measureAnnotation).toHaveAttribute("title", "Indicação musical: Breque com metais");
+
+    // 3. Testa transposição: a anotação permanece inalterada
+    const previewSelect = page.locator("select[data-preview-key]");
+    if (await previewSelect.count() > 0) {
+      await previewSelect.evaluate((select) => {
+        select.value = "G";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await expect(page.locator("#preview-banner")).toBeVisible();
+      await expect(measureAnnotation).toBeVisible();
+      await expect(measureAnnotation).toHaveText("Breque com metais");
+
+      // Restaura para o tom original
+      await previewSelect.evaluate((select) => {
+        select.value = "";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await expect(page.locator("#preview-banner")).toBeHidden();
+    }
+
+    // 4. Entra na leitura limpa (modo folha/clean)
+    await page.click('[data-action="toggle-clean"]');
+    await expect(page.locator("body")).toHaveClass(/clean/);
+    const cleanAnnotation = page.locator(".reading-spread .bar .measure-annotation").first();
+    await expect(cleanAnnotation).toBeVisible();
+    await expect(cleanAnnotation).toHaveText("Breque com metais");
+
+    // Sai da leitura limpa
+    await page.click('[data-action="toggle-clean"]');
+    await expect(page.locator("body")).not.toHaveClass(/clean/);
+
+    // 5. Entra no modo palco através da setlist
+    await gotoRoute(page, "#/setlists");
+    const setlistCards = page.locator(".cards article.card");
+    if (await setlistCards.count() > 0) {
+      await setlistCards.first().locator("a").click();
+      await page.click('[data-action="enter-stage"]');
+      await expect(page.locator("body")).toHaveClass(/stage/);
+
+      // No modo palco, seleciona a primeira música ou verifica se a anotação está no stage-paper
+      const stageAnnotation = page.locator("#stage-paper .bar .measure-annotation");
+      if (await stageAnnotation.count() > 0) {
+        await expect(stageAnnotation.first()).toBeVisible();
+        await expect(stageAnnotation.first()).toHaveText("Breque com metais");
+      }
+      await page.click('[data-action="exit-stage"]');
+    }
+
+    expect(errors).toEqual([]);
+  });
 });

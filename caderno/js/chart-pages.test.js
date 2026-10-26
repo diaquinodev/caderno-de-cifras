@@ -13,6 +13,7 @@ import {
   resolveReadingPresentation,
   updateReadingZoomPreferences,
 } from "./chart-pages.js";
+import { transposeSections } from "./chords.js";
 
 function song(sectionSizes, barsPerRow = 4) {
   let measureIndex = 0;
@@ -83,6 +84,11 @@ test("compasso compacto exige exatamente um acorde curto sem repetição nem cas
   atom.measure.repeat = "";
   atom.measure.ending = "1";
   assert.equal(canUseCompactMeasure(atom), false);
+  atom.measure.ending = "";
+  atom.measure.annotation = "Solo";
+  assert.equal(canUseCompactMeasure(atom), false);
+  atom.measure.annotation = "";
+  assert.equal(canUseCompactMeasure(atom), true);
 });
 
 test("paginateChartSystems limita cada página a no máximo 12 sistemas", () => {
@@ -338,3 +344,25 @@ test("composeReadingSpread preserva a última página ímpar e normaliza a troca
   assert.equal(normalizeReadingSpreadPage(2, 5, 1), 2);
   assert.deepEqual(composeReadingSpread(pages, 5, 2).visiblePages.map((page) => page.index), [5]);
 });
+
+test("fase 6 / item 62: compasso anotado impede compactação e transposição preserva anotação", () => {
+  const chart = song([8]);
+  chart.sections[0].measures.forEach((measure) => {
+    measure.chords = "C7";
+  });
+  // Bloco de 8 sem anotação pode ser compactado
+  const normalSystems = composeChartSystems(flattenChartMeasures(chart));
+  assert.equal(normalSystems[0].density, "compact");
+
+  // Adiciona anotação a um dos compassos -> impede compactação e mantém densidade normal (4 compassos por linha)
+  chart.sections[0].measures[2].annotation = "Breque";
+  const systemsWithAnnotation = composeChartSystems(flattenChartMeasures(chart));
+  assert.equal(systemsWithAnnotation[0].density, "normal");
+  assert.equal(systemsWithAnnotation[0].placements.length, 4);
+
+  // Transposição de tom preserva o campo annotation intacto
+  const transposed = transposeSections(chart.sections, "C", "F");
+  assert.equal(transposed[0].measures[2].chords, "F7");
+  assert.equal(transposed[0].measures[2].annotation, "Breque");
+});
+
