@@ -1234,17 +1234,19 @@ export function applyDraftToSong(draft, song, options = {}) {
 
 /**
  * Valida se um rascunho atende a todos os requisitos para ser confirmado e salvo na biblioteca.
- * Exige escolha explícita da fórmula de compasso (Don Norman: restrições e prevenção de erro).
+ * Exige escolha explícita da fórmula de compasso (Don Norman: restrições e prevenção de erro),
+ * exceto quando explicitamente permitido (ex.: edição de música salva preexistente sem fórmula).
  *
  * @param {ImportDraft} draft
+ * @param {{ allowEmptyTimeSignature?: boolean }} [options]
  * @returns {{ valid: boolean, errors: string[] }}
  */
-export function validateDraftForConfirmation(draft) {
+export function validateDraftForConfirmation(draft, options = {}) {
   const errors = [];
   if (!draft) {
     return { valid: false, errors: ["Rascunho inexistente."] };
   }
-  if (!draft.timeSignature || !draft.timeSignature.trim()) {
+  if (!options.allowEmptyTimeSignature && (!draft.timeSignature || !draft.timeSignature.trim())) {
     errors.push("Escolha uma fórmula de compasso (ex.: 4/4, 2/4, 3/4, 6/8) antes de confirmar a música.");
   }
   if (!draft.title || !draft.title.trim()) {

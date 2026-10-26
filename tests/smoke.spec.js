@@ -2076,4 +2076,69 @@ Tom: C
     await page.click('[data-action="draft-cancel"]');
     expect(errors).toEqual([]);
   });
+
+  test("fase 32: reabrir estrutura de música salva, apagar acorde, desfazer e salvar sem duplicar", async ({ page }) => {
+    const errors = await setupPage(page);
+
+    await gotoRoute(page, "#/musicas");
+
+    const cards = page.locator(".cards article.card");
+    const initialSongsCount = await cards.count();
+    expect(initialSongsCount).toBeGreaterThan(0);
+
+    // Abre a primeira música da biblioteca
+    await cards.first().locator("a").click();
+    await expect(page.locator('[data-action="open-structure-editor"]')).toBeVisible();
+
+    // Reabre no editor estrutural
+    await page.click('[data-action="open-structure-editor"]');
+    await expect(page.locator("#draft-title")).toHaveText("Editar Estrutura Musical");
+
+    // Autoridade é a música salva: sem abas nem coluna de fonte literal
+    await expect(page.locator(".draft-source-column")).toHaveCount(0);
+    await expect(page.locator(".draft-view-tabs")).toHaveCount(0);
+    await expect(page.locator("#btn-draft-confirm")).toHaveText("Salvar alterações");
+
+    const firstMeasure = page.locator(".draft-measure-box").first();
+    const chordTokens = firstMeasure.locator(".measure-chord-token");
+    const initialChordCount = await chordTokens.count();
+    expect(initialChordCount).toBeGreaterThan(0);
+
+    // Seleciona o primeiro acorde
+    await chordTokens.first().click();
+    const deleteBtn = page.locator('[data-action="draft-delete-chord"]');
+    await expect(deleteBtn).toBeVisible();
+    await expect(deleteBtn).toContainText("Apagar acorde");
+
+    // Apaga o acorde selecionado
+    await deleteBtn.click();
+    await expect(page.locator("#toast")).toContainText("apagado");
+    await expect(firstMeasure.locator(".measure-chord-token")).toHaveCount(Math.max(0, initialChordCount - 1));
+
+    // Desfaz a exclusão com Control+z
+    await page.keyboard.press("Control+z");
+    await expect(page.locator("#toast")).toContainText("Ação desfeita");
+    await expect(firstMeasure.locator(".measure-chord-token")).toHaveCount(initialChordCount);
+
+    // Apaga novamente e confirma salvamento
+    await firstMeasure.locator(".measure-chord-token").first().click();
+    await page.locator('[data-action="draft-delete-chord"]').click();
+    await page.locator("#btn-draft-confirm").click();
+    await expect(page.locator("#toast")).toContainText("atualizada com sucesso");
+    await expect(page.locator("#draft-title")).toBeHidden();
+
+    // Volta à biblioteca e confirma que não houve duplicação
+    await gotoRoute(page, "#/musicas");
+    await expect(page.locator(".cards article.card")).toHaveCount(initialSongsCount);
+
+    // Reabre a mesma música na interface para provar a persistência da alteração
+    await page.locator(".cards article.card").first().locator("a").click();
+    await page.locator('[data-action="open-structure-editor"]').click();
+    await expect(page.locator("#draft-title")).toHaveText("Editar Estrutura Musical");
+    const reloadedFirstMeasure = page.locator(".draft-measure-box").first();
+    await expect(reloadedFirstMeasure.locator(".measure-chord-token")).toHaveCount(Math.max(0, initialChordCount - 1));
+
+    await page.locator('[data-action="draft-cancel"]').click();
+    expect(errors).toEqual([]);
+  });
 });

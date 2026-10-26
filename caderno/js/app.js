@@ -14,6 +14,9 @@ import {
   pushDraftHistoryState,
   undoDraftHistoryState,
   convertDraftToSong,
+  createDraftFromSong,
+  applyDraftToSong,
+  removeChordFromMeasure,
   validateDraftForConfirmation,
   isSectionCompacted,
   getSectionRepeatCompactions,
@@ -101,6 +104,7 @@ const state = {
   fullscreenFallback: false,
   confirm: null,
   wizard: null,
+  editingDraftSongId: null,
   currentDraft: null,
   draftHistory: createDraftHistory(),
   draftActiveTab: "chart",
@@ -797,11 +801,18 @@ const actions = {
   "cycle-ending": (element) => cycleMeasure(element, "ending", ENDING_CYCLE),
   "cycle-repeat": (element) => cycleMeasure(element, "repeat", REPEAT_CYCLE),
   "open-paste": () => openPaste(),
+  "open-structure-editor": () => openStructureEditor(),
   "open-draft": () => openDraft(),
   "draft-set-timesig": (btn) => handleDraftTimeSig(btn.dataset.timesig),
   "draft-clear-timesig": () => handleDraftTimeSig(""),
   "draft-select-chord": (btn) =>
     handleDraftSelectChord(
+      btn.dataset.sectionId,
+      btn.dataset.measureId,
+      Number(btn.dataset.chordIndex)
+    ),
+  "draft-delete-chord": (btn) =>
+    handleDraftDeleteChord(
       btn.dataset.sectionId,
       btn.dataset.measureId,
       Number(btn.dataset.chordIndex)
@@ -1114,6 +1125,7 @@ function viewSong() {
       <button class="btn ghost" type="button" data-action="add-section">Seção</button>
       <button class="btn ghost" type="button" data-action="open-form">Forma</button>
       <button class="btn ghost" type="button" data-action="open-paste">Colar</button>
+      <button class="btn ghost" type="button" data-action="open-structure-editor">Editar estrutura</button>
       <button class="btn ghost" type="button" data-action="pick-pdf">${song.pdfName ? "Trocar PDF" : "Anexar PDF"}</button>
       ${song.pdfName ? `<span class="pdf-chip" title="${esc(song.pdfName)}">${esc(song.pdfName)} · ${song.pdfPages || 1} pág.</span>` : ""}
       ${song.pdfName ? `<button class="btn ghost" type="button" data-action="read-pdf">Ler PDF</button>` : ""}
@@ -1985,6 +1997,7 @@ async function openDraft() {
       pasteError("Nenhum acorde reconhecível foi encontrado no texto colado.");
       return;
     }
+    state.editingDraftSongId = null;
     state.draftHistory = createDraftHistory();
     state.draftActiveTab = "chart";
     state.selectedDraftChord = null;
@@ -1993,6 +2006,17 @@ async function openDraft() {
   } catch (err) {
     pasteError(err.message || "Erro ao processar a fonte da cifra.");
   }
+}
+
+function openStructureEditor() {
+  const song = currentSong();
+  if (!song) return;
+  state.editingDraftSongId = song.id;
+  state.currentDraft = createDraftFromSong(song);
+  state.draftHistory = createDraftHistory();
+  state.selectedDraftChord = null;
+  state.draftActiveTab = "chart";
+  renderDraftModal();
 }
 
 function pushDraftHistory() {
@@ -2146,6 +2170,46 @@ function handleDraftMoveMeasure(sectionId, measureId, dir) {
   renderDraftModal();
 }
 
+function handleDraftDeleteChord(sectionId, measureId, chordIndex) {
+  if (!state.currentDraft) return;
+  const draft = state.currentDraft;
+  const sec = draft.sections.find((s) => s.id === sectionId);
+  if (!sec || isSectionCompacted(draft, sectionId)) return;
+  const meas = sec.measures.find((m) => m.id === measureId);
+  if (!meas) return;
+  const chordsList =
+    Array.isArray(meas.sourceChords) && meas.sourceChords.length > 0
+      ? meas.sourceChords
+      : String(meas.chords || "")
+          .trim()
+          .split(/\s+/)
+          .filter(Boolean)
+          .map((tok) => ({ raw: tok, normalized: tok }));
+  if (chordIndex < 0 || chordIndex >= chordsList.length) return;
+  const targetChord = chordsList[chordIndex];
+  const targetLabel = targetChord?.raw || targetChord?.normalized || "acorde";
+
+  pushDraftHistory();
+  state.currentDraft = removeChordFromMeasure(draft, sectionId, measureId, chordIndex);
+  state.selectedDraftChord = null;
+  renderDraftModal();
+  toast(`Acorde ${targetLabel} apagado. Use Desfazer (Ctrl+Z) para restaurar.`);
+
+  requestAnimationFrame(() => {
+    const measureBox = modalRoot.querySelector(`.draft-measure-box[data-measure-id="${measureId}"]`);
+    if (measureBox) {
+      const remainingChords = measureBox.querySelectorAll(".measure-chord-token");
+      if (remainingChords.length > 0) {
+        const nextFocus = remainingChords[Math.min(chordIndex, remainingChords.length - 1)];
+        nextFocus?.focus();
+      } else {
+        measureBox.setAttribute("tabindex", "-1");
+        measureBox.focus();
+      }
+    }
+  });
+}
+
 function handleDraftSplitSection(sectionId) {
   if (!state.currentDraft) return;
   const sec = state.currentDraft.sections.find((s) => s.id === sectionId);
@@ -2159,7 +2223,8 @@ function handleDraftSplitSection(sectionId) {
 function confirmDraft() {
   if (!state.currentDraft) return;
   const draft = state.currentDraft;
-  const validation = validateDraftForConfirmation(draft);
+  const isEditingSavedSong = Boolean(state.editingDraftSongId);
+  const validation = validateDraftForConfirmation(draft, { allowEmptyTimeSignature: isEditingSavedSong });
   if (!validation.valid) {
     const errorEl = document.querySelector("#draft-time-sig-error");
     const bannerEl = document.querySelector("#draft-time-sig-banner");
@@ -2176,28 +2241,42 @@ function confirmDraft() {
     return;
   }
 
-  const song = convertDraftToSong(draft);
-  const cur = currentSong();
-
-  if (cur && (cur.title === "Sem título" || !chartHasChords(cur))) {
-    cur.title = song.title;
-    cur.composer = song.composer;
-    cur.key = song.key;
-    cur.timeSignature = song.timeSignature;
-    cur.tempo = song.tempo;
-    cur.barsPerRow = song.barsPerRow;
-    cur.notes = song.notes;
-    cur.sections = song.sections;
-    cur.sourceSnapshot = song.sourceSnapshot;
-    touchSong(cur, true);
-    toast(`Música "${cur.title}" atualizada com o rascunho.`);
+  if (isEditingSavedSong) {
+    const target = state.library.songs.find((s) => s.id === state.editingDraftSongId);
+    if (target) {
+      const updated = applyDraftToSong(draft, target);
+      const songIndex = state.library.songs.findIndex((s) => s.id === state.editingDraftSongId);
+      if (songIndex !== -1) {
+        state.library.songs[songIndex] = updated;
+      }
+      persist(true);
+      toast(`Estrutura da música "${updated.title}" atualizada com sucesso.`);
+    }
   } else {
-    state.library.songs.unshift(song);
-    persist(true);
-    go(`#/musicas/${song.id}`);
-    toast(`Música "${song.title}" criada a partir do rascunho.`);
+    const song = convertDraftToSong(draft);
+    const cur = currentSong();
+
+    if (cur && (cur.title === "Sem título" || !chartHasChords(cur))) {
+      cur.title = song.title;
+      cur.composer = song.composer;
+      cur.key = song.key;
+      cur.timeSignature = song.timeSignature;
+      cur.tempo = song.tempo;
+      cur.barsPerRow = song.barsPerRow;
+      cur.notes = song.notes;
+      cur.sections = song.sections;
+      cur.sourceSnapshot = song.sourceSnapshot;
+      touchSong(cur, true);
+      toast(`Música "${cur.title}" atualizada com o rascunho.`);
+    } else {
+      state.library.songs.unshift(song);
+      persist(true);
+      go(`#/musicas/${song.id}`);
+      toast(`Música "${song.title}" criada a partir do rascunho.`);
+    }
   }
 
+  state.editingDraftSongId = null;
   state.currentDraft = null;
   state.draftHistory = createDraftHistory();
   state.selectedDraftChord = null;
@@ -2206,6 +2285,7 @@ function confirmDraft() {
 }
 
 function cancelDraft() {
+  state.editingDraftSongId = null;
   state.currentDraft = null;
   state.draftHistory = createDraftHistory();
   state.selectedDraftChord = null;
@@ -2387,7 +2467,8 @@ function renderDraftModal() {
             ? `<button type="button" class="btn ghost micro" data-action="draft-split-chord" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-chord-index="${selectedIdx}" title="Dividir compasso usando ${esc(selectedChordLabel)} como fronteira" aria-label="Dividir no acorde ${esc(selectedChordLabel)}">✂ Dividir aqui</button>`
             : "";
           const moveRightBtn = `<button type="button" class="btn ghost micro" data-action="draft-move-chord" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-chord-index="${selectedIdx}" data-dir="1" ${canChordRight ? "" : "disabled"} title="${canChordRight ? `Mover acorde ${esc(selectedChordLabel)} para o compasso seguinte` : "Apenas o último acorde do compasso pode ir para o compasso seguinte sem alterar a ordem musical"}" aria-label="Mover acorde ${esc(selectedChordLabel)} para o compasso seguinte">Acorde →</button>`;
-          chordActionsHtml = `<div class="measure-chord-actions" role="group" aria-label="Ações do acorde ${esc(selectedChordLabel)}">${moveLeftBtn}${splitAtChordBtn}${moveRightBtn}</div>`;
+          const deleteChordBtn = `<button type="button" class="btn danger micro" data-action="draft-delete-chord" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-chord-index="${selectedIdx}" title="Apagar acorde ${esc(selectedChordLabel)}" aria-label="Apagar acorde ${esc(selectedChordLabel)}">✕ Apagar acorde</button>`;
+          chordActionsHtml = `<div class="measure-chord-actions" role="group" aria-label="Ações do acorde ${esc(selectedChordLabel)}">${moveLeftBtn}${splitAtChordBtn}${moveRightBtn}${deleteChordBtn}</div>`;
         }
 
         const prevBtn = !compacted && mIdx > 0
@@ -2433,35 +2514,54 @@ function renderDraftModal() {
   const sourceContent = renderDraftSourceContent(draft.sourceSnapshot);
   const liveAnnouncement = state.draftRepeatLiveAnnouncement || "";
 
-  const tabSwitcher = `
-    <div class="draft-view-tabs" role="tablist">
+  const isEditingSavedSong = Boolean(state.editingDraftSongId);
+  const hasSource = Boolean(draft.sourceSnapshot) && !isEditingSavedSong;
+  const modalTitle = isEditingSavedSong ? "Editar Estrutura Musical" : "Rascunho Musical";
+  const modalSubtitle = isEditingSavedSong
+    ? `<strong>Música salva:</strong> ${esc(draft.title)} · <strong>Tom:</strong> ${esc(draft.key)} · <strong>Compositor:</strong> ${esc(draft.composer || "Não informado")}`
+    : `<strong>Título:</strong> ${esc(draft.title)} · <strong>Tom:</strong> ${esc(draft.key)} · <strong>Artista:</strong> ${esc(draft.artist || "Não informado")}`;
+  const confirmBtnLabel = isEditingSavedSong ? "Salvar alterações" : "Confirmar e criar música";
+  const chordHintText = isEditingSavedSong
+    ? "Toque em um acorde para movê-lo, dividi-lo ou apagá-lo."
+    : "Toque em um acorde para movê-lo entre compassos, dividi-lo ou apagá-lo.";
+
+  const tabSwitcher = hasSource
+    ? `<div class="draft-view-tabs" role="tablist">
       <button type="button" class="btn ${activeTab === 'chart' ? 'primary small' : 'ghost small'}" data-action="draft-switch-tab" data-tab="chart" role="tab" aria-selected="${activeTab === 'chart'}">Compassos Sugeridos</button>
       <button type="button" class="btn ${activeTab === 'source' ? 'primary small' : 'ghost small'}" data-action="draft-switch-tab" data-tab="source" role="tab" aria-selected="${activeTab === 'source'}">Fonte Literal Original</button>
-    </div>
-  `;
+    </div>`
+    : "";
 
-  openModal(`<div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="draft-title" style="max-height: min(92dvh, 880px); overflow-y: auto;">
-    <h2 id="draft-title">Rascunho Musical</h2>
-    <p class="meta"><strong>Título:</strong> ${esc(draft.title)} · <strong>Tom:</strong> ${esc(draft.key)} · <strong>Artista:</strong> ${esc(draft.artist || "Não informado")}</p>
-    ${tabSwitcher}
-    <div class="draft-review-layout ${activeTab === 'source' ? 'show-source-tab' : 'show-chart-tab'}">
-      <div class="draft-source-column">
+  const layoutClass = hasSource
+    ? `draft-review-layout ${activeTab === 'source' ? 'show-source-tab' : 'show-chart-tab'}`
+    : "draft-review-layout draft-single-column show-chart-tab";
+
+  const sourceColumnHtml = hasSource
+    ? `<div class="draft-source-column">
         <h3>Fonte Literal Original</h3>
         ${sourceContent}
-      </div>
+      </div>`
+    : "";
+
+  openModal(`<div class="modal modal-wide" role="dialog" aria-modal="true" aria-labelledby="draft-title" style="max-height: min(92dvh, 880px); overflow-y: auto;">
+    <h2 id="draft-title">${modalTitle}</h2>
+    <p class="meta">${modalSubtitle}</p>
+    ${tabSwitcher}
+    <div class="${layoutClass}">
+      ${sourceColumnHtml}
       <div class="draft-chart-column">
         ${timeSigBanner}
         ${errorBanner}
         ${warningsHtml}
         <div style="margin: 12px 0;">
           <div id="draft-repeat-live" class="sr-only" aria-live="polite">${esc(liveAnnouncement)}</div>
-          <p class="meta"><strong>Estrutura:</strong> ${draft.sections.length} seção(ões), ${totalMeasures !== canonicalMeasures ? `${totalMeasures} compasso(s) visíveis (${canonicalMeasures} canônicos)` : `${totalMeasures} compasso(s)`}. ${inv.valid ? "✓ Invariantes conferidos" : "⚠ Atenção aos invariantes"} · <span class="draft-chord-hint">Toque em um acorde para movê-lo entre compassos ou dividir a partir dele.</span></p>
+          <p class="meta"><strong>Estrutura:</strong> ${draft.sections.length} seção(ões), ${totalMeasures !== canonicalMeasures ? `${totalMeasures} compasso(s) visíveis (${canonicalMeasures} canônicos)` : `${totalMeasures} compasso(s)`}. ${inv.valid ? "✓ Invariantes conferidos" : "⚠ Atenção aos invariantes"} · <span class="draft-chord-hint">${chordHintText}</span></p>
           ${sectionsHtml}
         </div>
       </div>
     </div>
     <div class="inline-actions draft-footer-actions" style="margin-top: 16px;">
-      <button class="btn primary" type="button" data-action="draft-confirm" id="btn-draft-confirm">Confirmar e criar música</button>
+      <button class="btn primary" type="button" data-action="draft-confirm" id="btn-draft-confirm">${confirmBtnLabel}</button>
       <button class="btn ghost" type="button" data-action="draft-undo" id="btn-draft-undo" title="Desfazer (Ctrl+Z ou ⌘Z)" aria-keyshortcuts="Control+Z Meta+Z" ${hasHistory ? "" : "disabled"}>↩ Desfazer</button>
       <button class="btn ghost" type="button" data-action="draft-cancel">Cancelar rascunho</button>
     </div>
