@@ -38,6 +38,13 @@ import { uid, blankSong } from "./store.js";
  */
 
 /**
+ * @typedef {Object} DraftChordExclusion
+ * @property {number | null} sourceIndex
+ * @property {SourceChord} chord
+ * @property {"manual-cleanup"} reason
+ */
+
+/**
  * @typedef {Object} ImportDraft
  * @property {string} id
  * @property {string} sourceId
@@ -51,6 +58,7 @@ import { uid, blankSong } from "./store.js";
  * @property {DraftSection[]} sections
  * @property {DraftWarning[]} warnings
  * @property {SourceExclusion[]} exclusions
+ * @property {DraftChordExclusion[]} chordExclusions
  * @property {CifraSource | null} sourceSnapshot
  * @property {RepeatCompaction[]} [repeatCompactions]
  * @property {string[]} [dismissedRepeatCandidateIds]
@@ -417,6 +425,7 @@ export function suggestChart(sourceInput, options = {}) {
     sections,
     warnings,
     exclusions: [...(source.exclusions || [])],
+    chordExclusions: [],
     sourceSnapshot: source,
     repeatCompactions: [],
     dismissedRepeatCandidateIds: [],
@@ -465,6 +474,7 @@ export function createDraftFromSong(song) {
     sections,
     warnings: [],
     exclusions: [],
+    chordExclusions: [],
     sourceSnapshot: null,
     repeatCompactions: [],
     dismissedRepeatCandidateIds: [],
@@ -507,22 +517,61 @@ export function verifyDraftInvariants(draft, expectedSource) {
   }
 
   if (source && Array.isArray(source.allChords)) {
-    if (collected.length !== source.allChords.length) {
+    const exclusions = Array.isArray(draft.chordExclusions) ? draft.chordExclusions : [];
+    const exclusionsByIndex = new Map();
+
+    for (const exclusion of exclusions) {
+      const sourceIndex = exclusion?.sourceIndex;
+      if (!Number.isInteger(sourceIndex) || sourceIndex < 0 || sourceIndex >= source.allChords.length) {
+        errors.push(`Exclusão de acorde com índice de fonte inválido: ${sourceIndex}`);
+        continue;
+      }
+      if (exclusionsByIndex.has(sourceIndex)) {
+        errors.push(`Exclusão duplicada para o acorde da fonte no índice ${sourceIndex}`);
+        continue;
+      }
+      if (exclusion.reason !== "manual-cleanup") {
+        errors.push(`Exclusão de acorde no índice ${sourceIndex} sem motivo válido`);
+      }
+      if (!sameSourceChord(exclusion.chord, source.allChords[sourceIndex])) {
+        errors.push(`Exclusão não corresponde ao acorde da fonte no índice ${sourceIndex}`);
+      }
+      exclusionsByIndex.set(sourceIndex, exclusion);
+    }
+
+    let collectedIndex = 0;
+    for (let sourceIndex = 0; sourceIndex < source.allChords.length; sourceIndex += 1) {
+      if (exclusionsByIndex.has(sourceIndex)) continue;
+
+      const actual = collected[collectedIndex];
+      const expected = source.allChords[sourceIndex];
+      if (!sameSourceChord(actual, expected)) {
+        errors.push(
+          `Divergência de acorde no índice ${sourceIndex}: ${actual?.raw ?? "ausente"} !== ${expected?.raw}`
+        );
+        break;
+      }
+      collectedIndex += 1;
+    }
+
+    if (collectedIndex < collected.length) {
+      errors.push(`Rascunho contém ${collected.length - collectedIndex} acorde(s) sem origem registrada`);
+    }
+    if (collected.length + exclusionsByIndex.size !== source.allChords.length) {
       errors.push(
-        `Divergência de acordes: fonte tinha ${source.allChords.length}, mas rascunho tem ${collected.length}`
+        `Divergência de acordes: fonte tinha ${source.allChords.length}, rascunho tem ${collected.length} e ${exclusionsByIndex.size} exclusão(ões)`
       );
-    } else {
-      for (let ci = 0; ci < collected.length; ci += 1) {
-        const actual = collected[ci];
-        const expected = source.allChords[ci];
-        const sameChord =
-          actual === expected ||
-          (Boolean(actual) &&
-            Boolean(expected) &&
-            actual.raw === expected.raw &&
-            actual.normalized === expected.normalized);
-        if (!sameChord) {
-          errors.push(`Divergência de acorde no índice ${ci}: ${actual?.raw} !== ${expected?.raw}`);
+    }
+  } else {
+    for (const sec of draft.sections) {
+      if (sec.kind !== "chords" || !Array.isArray(sec.measures)) continue;
+      for (const meas of sec.measures) {
+        const chordTokens = String(meas.chords || "").trim().split(/\s+/).filter(Boolean);
+        const sourceTokens = Array.isArray(meas.sourceChords)
+          ? meas.sourceChords.map((chord) => chord?.normalized || chord?.raw).filter(Boolean)
+          : [];
+        if (chordTokens.length !== sourceTokens.length || chordTokens.some((token, index) => token !== sourceTokens[index])) {
+          errors.push(`Compasso ${meas.id || "sem id"} diverge dos acordes estruturados`);
           break;
         }
       }
@@ -533,6 +582,21 @@ export function verifyDraftInvariants(draft, expectedSource) {
     valid: errors.length === 0,
     errors,
   };
+}
+
+/**
+ * @param {SourceChord | undefined | null} actual
+ * @param {SourceChord | undefined | null} expected
+ * @returns {boolean}
+ */
+function sameSourceChord(actual, expected) {
+  return (
+    actual === expected ||
+    (Boolean(actual) &&
+      Boolean(expected) &&
+      actual.raw === expected.raw &&
+      actual.normalized === expected.normalized)
+  );
 }
 
 /**
@@ -743,6 +807,62 @@ export function moveChordBetweenMeasures(draft, sectionId, measureId, chordIndex
 }
 
 /**
+ * Remove apenas o acorde selecionado e mantém o compasso e seus marcadores.
+ * A exclusão fica registrada para que a proveniência continue verificável e o
+ * histórico possa restaurar o estado anterior integralmente.
+ *
+ * @param {ImportDraft} draft
+ * @param {string} sectionId
+ * @param {string} measureId
+ * @param {number} chordIndex
+ * @returns {ImportDraft}
+ */
+export function removeChordFromMeasure(draft, sectionId, measureId, chordIndex) {
+  if (!draft || !Array.isArray(draft.sections) || isSectionCompacted(draft, sectionId)) {
+    return draft;
+  }
+
+  const section = draft.sections.find((candidate) => candidate.id === sectionId);
+  const measure = section?.measures?.find((candidate) => candidate.id === measureId);
+  const sourceChords = Array.isArray(measure?.sourceChords) ? measure.sourceChords : [];
+  if (!Number.isInteger(chordIndex) || chordIndex < 0 || chordIndex >= sourceChords.length) {
+    return draft;
+  }
+
+  const removedChord = sourceChords[chordIndex];
+  const sourceIndex = Array.isArray(draft.sourceSnapshot?.allChords)
+    ? draft.sourceSnapshot.allChords.indexOf(removedChord)
+    : null;
+  if (sourceIndex === -1) return draft;
+
+  const nextSourceChords = sourceChords.filter((_, index) => index !== chordIndex);
+  const sections = draft.sections.map((candidateSection) => {
+    if (candidateSection.id !== sectionId) return candidateSection;
+    return {
+      ...candidateSection,
+      measures: candidateSection.measures.map((candidateMeasure) =>
+        candidateMeasure.id === measureId
+          ? {
+              ...candidateMeasure,
+              chords: nextSourceChords.map((chord) => chord.normalized || chord.raw).join(" "),
+              sourceChords: nextSourceChords,
+            }
+          : candidateMeasure
+      ),
+    };
+  });
+
+  return syncDraftMeasureWarnings({
+    ...draft,
+    sections,
+    chordExclusions: [
+      ...(Array.isArray(draft.chordExclusions) ? draft.chordExclusions : []),
+      { sourceIndex, chord: removedChord, reason: "manual-cleanup" },
+    ],
+  });
+}
+
+/**
  * Une dois compassos adjacentes em um único compasso.
  *
  * @param {ImportDraft} draft
@@ -936,6 +1056,9 @@ export function cloneDraftState(draft) {
       : [],
     warnings: Array.isArray(draft.warnings) ? draft.warnings.map((w) => ({ ...w })) : [],
     exclusions: Array.isArray(draft.exclusions) ? draft.exclusions.map((e) => ({ ...e })) : [],
+    chordExclusions: Array.isArray(draft.chordExclusions)
+      ? draft.chordExclusions.map((exclusion) => ({ ...exclusion }))
+      : [],
     repeatCompactions: Array.isArray(draft.repeatCompactions)
       ? draft.repeatCompactions.map((c) => ({
           ...c,
