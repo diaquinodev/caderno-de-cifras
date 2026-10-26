@@ -2141,4 +2141,77 @@ Tom: C
     await page.locator('[data-action="draft-cancel"]').click();
     expect(errors).toEqual([]);
   });
+
+  test("fase 33: criar, editar, desfazer e persistir anotação acima do compasso no editor estrutural", async ({ page }) => {
+    const errors = await setupPage(page);
+
+    await gotoRoute(page, "#/musicas");
+    const cards = page.locator(".cards article.card");
+    await expect(cards.first()).toBeVisible();
+
+    // Abre a primeira música e seu editor estrutural
+    await cards.first().locator("a").click();
+    await page.click('[data-action="open-structure-editor"]');
+    await expect(page.locator("#draft-title")).toHaveText("Editar Estrutura Musical");
+
+    const firstMeasure = page.locator(".draft-measure-box").first();
+    const editAnnotationBtn = firstMeasure.locator('[data-action="draft-edit-annotation"]');
+    await expect(editAnnotationBtn).toBeVisible();
+    await expect(editAnnotationBtn).toContainText("Texto acima");
+
+    // Clica para editar anotação acima do compasso
+    await editAnnotationBtn.click();
+    const annotationInput = firstMeasure.locator(".draft-annotation-input");
+    await expect(annotationInput).toBeVisible();
+    await expect(annotationInput).toBeFocused();
+
+    // Preenche anotação e salva com Enter
+    await annotationInput.fill("Breque com metais");
+    await page.keyboard.press("Enter");
+
+    await expect(page.locator("#toast")).toContainText("atualizada");
+    const badge = firstMeasure.locator(".measure-annotation-badge");
+    await expect(badge).toBeVisible();
+    await expect(badge).toContainText("Breque com metais");
+    await expect(editAnnotationBtn).toContainText("Editar texto");
+
+    // Desfaz com Control+z
+    await page.keyboard.press("Control+z");
+    await expect(page.locator("#toast")).toContainText("Ação desfeita");
+    await expect(firstMeasure.locator(".measure-annotation-badge")).toBeHidden();
+    await expect(editAnnotationBtn).toContainText("Texto acima");
+
+    // Edita novamente, salva via botão de confirmação e conclui rascunho
+    await editAnnotationBtn.click();
+    await expect(firstMeasure.locator(".draft-annotation-input")).toBeVisible();
+    await firstMeasure.locator(".draft-annotation-input").fill("Solo de sax");
+    await firstMeasure.locator('[data-action="draft-save-annotation"]').click();
+    await expect(badge).toBeVisible();
+    await expect(badge).toContainText("Solo de sax");
+
+    // Salva o rascunho
+    await page.locator("#btn-draft-confirm").click();
+    await expect(page.locator("#toast")).toContainText("atualizada com sucesso");
+    await expect(page.locator("#draft-title")).toBeHidden();
+
+    // Reabre no editor estrutural para verificar persistência
+    await page.click('[data-action="open-structure-editor"]');
+    await expect(page.locator("#draft-title")).toHaveText("Editar Estrutura Musical");
+    const reloadedFirstMeasure = page.locator(".draft-measure-box").first();
+    await expect(reloadedFirstMeasure.locator(".measure-annotation-badge")).toBeVisible();
+    await expect(reloadedFirstMeasure.locator(".measure-annotation-badge")).toContainText("Solo de sax");
+
+    // Edita para remover a anotação
+    await reloadedFirstMeasure.locator('[data-action="draft-edit-annotation"]').click();
+    await reloadedFirstMeasure.locator(".draft-annotation-input").fill("");
+    await page.keyboard.press("Enter");
+    await expect(page.locator("#toast")).toContainText("removida");
+    await expect(reloadedFirstMeasure.locator(".measure-annotation-badge")).toBeHidden();
+
+    // Salva sem anotação
+    await page.locator("#btn-draft-confirm").click();
+    await expect(page.locator("#toast")).toContainText("atualizada com sucesso");
+
+    expect(errors).toEqual([]);
+  });
 });

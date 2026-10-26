@@ -17,6 +17,7 @@ import {
   createDraftFromSong,
   applyDraftToSong,
   removeChordFromMeasure,
+  updateMeasureAnnotation,
   validateDraftForConfirmation,
   isSectionCompacted,
   getSectionRepeatCompactions,
@@ -105,6 +106,7 @@ const state = {
   confirm: null,
   wizard: null,
   editingDraftSongId: null,
+  editingAnnotationMeasureId: null,
   currentDraft: null,
   draftHistory: createDraftHistory(),
   draftActiveTab: "chart",
@@ -379,6 +381,21 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && event.target.classList?.contains("chord-input")) {
     event.preventDefault();
     focusNeighbor(event.target, event.shiftKey ? -1 : 1);
+    return;
+  }
+  if (event.target.classList?.contains("draft-annotation-input")) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const secId = event.target.dataset.sectionId;
+      const measId = event.target.dataset.measureId;
+      handleDraftSaveAnnotation(secId, measId);
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      handleDraftCancelAnnotation();
+      return;
+    }
     return;
   }
   if (event.target.matches?.("input, textarea, select")) return;
@@ -838,6 +855,9 @@ const actions = {
   "draft-dismiss-repeat": (btn) => handleDraftDismissRepeat(btn.dataset.candidateId),
   "draft-expand-repeat": (btn) => handleDraftExpandRepeat(btn.dataset.compactionId || btn.dataset.sectionId),
   "draft-switch-tab": (btn) => handleDraftSwitchTab(btn.dataset.tab),
+  "draft-edit-annotation": (btn) => handleDraftEditAnnotation(btn.dataset.sectionId, btn.dataset.measureId),
+  "draft-save-annotation": (btn) => handleDraftSaveAnnotation(btn.dataset.sectionId, btn.dataset.measureId),
+  "draft-cancel-annotation": () => handleDraftCancelAnnotation(),
   "draft-undo": () => handleDraftUndo(),
   "draft-confirm": () => confirmDraft(),
   "draft-cancel": () => cancelDraft(),
@@ -2036,6 +2056,7 @@ function handleDraftUndo() {
   state.currentDraft = res.draft;
   state.draftHistory = res.history;
   state.selectedDraftChord = null;
+  state.editingAnnotationMeasureId = null;
   state.draftRepeatLiveAnnouncement = "Última alteração do rascunho desfeita.";
   renderDraftModal();
   toast("Ação desfeita.");
@@ -2220,6 +2241,43 @@ function handleDraftSplitSection(sectionId) {
   renderDraftModal();
 }
 
+function handleDraftEditAnnotation(sectionId, measureId) {
+  if (!state.currentDraft) return;
+  state.editingAnnotationMeasureId = measureId;
+  state.selectedDraftChord = null;
+  renderDraftModal();
+  requestAnimationFrame(() => {
+    const input = modalRoot.querySelector(`#annotation-input-${measureId}`);
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  });
+}
+
+function handleDraftSaveAnnotation(sectionId, measureId) {
+  if (!state.currentDraft) return;
+  const input = modalRoot.querySelector(`#annotation-input-${measureId}`);
+  const val = input ? input.value : "";
+  pushDraftHistory();
+  state.currentDraft = updateMeasureAnnotation(state.currentDraft, sectionId, measureId, val);
+  state.editingAnnotationMeasureId = null;
+  renderDraftModal();
+  toast(val.trim() ? "Indicação musical atualizada." : "Indicação musical removida.");
+  requestAnimationFrame(() => {
+    const measureBox = modalRoot.querySelector(`.draft-measure-box[data-measure-id="${measureId}"]`);
+    if (measureBox) {
+      const editBtn = measureBox.querySelector('[data-action="draft-edit-annotation"]');
+      editBtn?.focus();
+    }
+  });
+}
+
+function handleDraftCancelAnnotation() {
+  state.editingAnnotationMeasureId = null;
+  renderDraftModal();
+}
+
 function confirmDraft() {
   if (!state.currentDraft) return;
   const draft = state.currentDraft;
@@ -2277,6 +2335,7 @@ function confirmDraft() {
   }
 
   state.editingDraftSongId = null;
+  state.editingAnnotationMeasureId = null;
   state.currentDraft = null;
   state.draftHistory = createDraftHistory();
   state.selectedDraftChord = null;
@@ -2286,6 +2345,7 @@ function confirmDraft() {
 
 function cancelDraft() {
   state.editingDraftSongId = null;
+  state.editingAnnotationMeasureId = null;
   state.currentDraft = null;
   state.draftHistory = createDraftHistory();
   state.selectedDraftChord = null;
@@ -2483,12 +2543,41 @@ function renderDraftModal() {
         const mergeBtn = !compacted && nextMeasure
           ? `<button type="button" class="btn ghost micro" data-action="draft-merge-measure" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-next-id="${esc(nextMeasure.id)}" title="Unir com próximo">🔗 Unir</button>`
           : "";
+        const annotationBtn = !compacted
+          ? `<button type="button" class="btn ghost micro" data-action="draft-edit-annotation" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" data-measure-number="${mIdx + 1}" title="${m.annotation ? `Alterar texto acima do compasso ${mIdx + 1}` : `Adicionar texto acima do compasso ${mIdx + 1}`}">💬 ${m.annotation ? "Editar texto" : "Texto acima"}</button>`
+          : "";
+
+        const isEditingAnnotation = state.editingAnnotationMeasureId === m.id;
+        const annotationEditorHtml = isEditingAnnotation
+          ? `<div class="measure-annotation-editor" role="group" aria-label="Editar indicação musical do compasso ${mIdx + 1}">
+              <label for="annotation-input-${esc(m.id)}" class="sr-only">Indicação musical acima do compasso ${mIdx + 1}</label>
+              <input
+                id="annotation-input-${esc(m.id)}"
+                class="draft-annotation-input"
+                type="text"
+                maxlength="40"
+                placeholder="Ex.: Breque, Solo, Entrada"
+                value="${esc(m.annotation || "")}"
+                data-section-id="${esc(sec.id)}"
+                data-measure-id="${esc(m.id)}"
+                aria-label="Indicação musical acima do compasso ${mIdx + 1}"
+                autocomplete="off"
+              />
+              <div class="inline-actions micro measure-annotation-actions" style="margin-top: 4px;">
+                <button type="button" class="btn primary micro" data-action="draft-save-annotation" data-section-id="${esc(sec.id)}" data-measure-id="${esc(m.id)}" title="Salvar indicação musical">Salvar</button>
+                <button type="button" class="btn ghost micro" data-action="draft-cancel-annotation" title="Cancelar edição">Cancelar</button>
+              </div>
+            </div>`
+          : m.annotation
+            ? `<div class="measure-annotation-badge" title="Indicação musical: ${esc(m.annotation)}"><span class="annotation-text">${esc(m.annotation)}</span></div>`
+            : "";
 
         return `<div class="draft-measure-box ${beatEval.needsReview ? "measure-needs-review" : ""} ${selectedIdx !== null ? "has-selected-chord" : ""} ${m.repeat ? `has-repeat-${esc(m.repeat)}` : ""}" data-measure-id="${esc(m.id)}" data-repeat="${esc(m.repeat || "")}" data-needs-review="${beatEval.needsReview ? "true" : "false"}">
+          ${annotationEditorHtml}
           <div class="measure-chords" role="group" aria-label="Acordes do compasso ${mIdx + 1}">${repeatStartBadge}${chordTokensHtml}${repeatEndBadge}</div>
           ${beatMetaHtml}
           ${chordActionsHtml}
-          ${!compacted ? `<div class="measure-actions" role="group" aria-label="Ações do compasso ${mIdx + 1}">${prevBtn}${nextBtn}${splitBtn}${mergeBtn}</div>` : ""}
+          ${!compacted ? `<div class="measure-actions" role="group" aria-label="Ações do compasso ${mIdx + 1}">${prevBtn}${nextBtn}${splitBtn}${mergeBtn}${annotationBtn}</div>` : ""}
         </div>`;
       }).join("");
 
