@@ -143,11 +143,13 @@ export function canUseCompactMeasure(atom, options = {}) {
   const chordTokens = chordText ? chordText.split(/\s+/).filter(Boolean) : [];
   const repeat = String(atom?.measure?.repeat || "").trim();
   const ending = String(atom?.measure?.ending || "").trim();
+  const annotation = String(atom?.measure?.annotation || "").trim();
   return chordTokens.length === 1 &&
     chordText.length <= textLimit &&
     chordTokens[0].length <= tokenLimit &&
     !repeat &&
-    !ending;
+    !ending &&
+    !annotation;
 }
 
 /**

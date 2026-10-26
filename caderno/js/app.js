@@ -1586,12 +1586,17 @@ function measureCell(measure, number, editable, isFinal, isRowEnd, options = {})
   if (measure.repeat === "start" || measure.repeat === "both") classes.push("repeat-start");
   if (measure.repeat === "end" || measure.repeat === "both") classes.push("repeat-end");
   if (measure.ending) classes.push("has-ending");
+  if (measure.annotation) classes.push("has-annotation");
+  if (options.sectionMarker) classes.push("has-section-marker");
   if (isFinal && measure.repeat !== "end" && measure.repeat !== "both") classes.push("final");
   else if (isRowEnd) classes.push("close");
   const shown = formatCell(measure.chords);
   const ending = measure.ending ? `${measure.ending}.` : "";
   const dots = `${measure.repeat === "start" || measure.repeat === "both" ? `<span class="rdots start"></span>` : ""}${measure.repeat === "end" || measure.repeat === "both" ? `<span class="rdots end"></span>` : ""}`;
   const endingHtml = measure.ending ? `<span class="ending-rule"></span><span class="ending-mark">${esc(ending)}</span>` : "";
+  const annotationHtml = measure.annotation
+    ? `<span class="measure-annotation" title="Indicação musical: ${esc(measure.annotation)}">${esc(measure.annotation)}</span>`
+    : "";
   const tools = editable
     ? `<div class="bar-tools">
          <button type="button" tabindex="-1" data-action="cycle-ending" title="Casa de final">${ending || "1."}</button>
@@ -1604,7 +1609,7 @@ function measureCell(measure, number, editable, isFinal, isRowEnd, options = {})
     : "";
   const style = adaptive ? ` style="--cell-span:${cellSpan}"` : "";
   const sectionMarker = typeof options.sectionMarker === "string" ? options.sectionMarker : "";
-  return `<div class="${classes.join(" ")}" data-measure-id="${esc(measure.id)}"${style}>${sectionMarker}${endingHtml}${dots}<div class="glyphs" aria-hidden="true">${glyphRow(shown)}</div>${field}${tools}</div>`;
+  return `<div class="${classes.join(" ")}" data-measure-id="${esc(measure.id)}"${style}>${sectionMarker}${endingHtml}${dots}${annotationHtml}<div class="glyphs" aria-hidden="true">${glyphRow(shown)}</div>${field}${tools}</div>`;
 }
 
 function viewPlaylists() {

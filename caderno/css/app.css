@@ -368,6 +368,39 @@ body.clean .video-dock { display: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.measure-annotation {
+  position: absolute;
+  z-index: 2;
+  top: calc(-13 * var(--u));
+  left: calc(6 * var(--u));
+  max-width: calc(100% - calc(12 * var(--u)));
+  overflow: hidden;
+  color: #1a4f7c;
+  font-family: Arial, Helvetica, sans-serif;
+  font-size: calc(10.5 * var(--u));
+  font-weight: 700;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+  pointer-events: auto;
+}
+.bar.has-section-marker .measure-annotation {
+  left: auto;
+  right: calc(6 * var(--u));
+  text-align: right;
+  max-width: calc(100% - calc(48 * var(--u)));
+}
+.bar.has-ending .measure-annotation {
+  left: calc(24 * var(--u));
+  max-width: calc(100% - calc(30 * var(--u)));
+}
+.bar.has-section-marker.has-ending .measure-annotation {
+  left: calc(24 * var(--u));
+  right: auto;
+  text-align: left;
+  max-width: calc(100% - calc(32 * var(--u)));
+}
 .bar::before {
   content: "";
   position: absolute;
@@ -1097,7 +1130,7 @@ body.clean .pdf-read { height: 100dvh; }
   .bar::before { border-left: 2.4pt solid #000 !important; width: 0 !important; }
   .bar.close::after, .bar.repeat-end::after { border-right: 2.4pt solid #000 !important; width: 0 !important; }
   .bar.final::after { border-left: 1.6pt solid #000 !important; border-right: 4.5pt solid #000 !important; }
-  .root, .qual, .acc, .slash, .sheet-title, .sheet-style, .sheet-composer, .style-wrap, .time-sig, .rehearsal, .ending-mark {
+  .root, .qual, .acc, .slash, .sheet-title, .sheet-style, .sheet-composer, .style-wrap, .time-sig, .rehearsal, .ending-mark, .measure-annotation, .adaptive-section-marker {
     color: #000 !important;
     -webkit-text-stroke: 0.45px #000;
   }
