@@ -12,7 +12,7 @@ export function blankLibrary() {
 }
 
 export function blankMeasure() {
-  return { id: uid(), chords: "", ending: "", repeat: "" };
+  return { id: uid(), chords: "", ending: "", repeat: "", annotation: "" };
 }
 
 export function blankSection(label = "A", bars = 8) {
@@ -75,6 +75,9 @@ function normalizeMeasure(measure) {
     chords: typeof measure?.chords === "string" ? measure.chords : "",
     ending: ["", "1", "2", "3"].includes(measure?.ending) ? measure.ending : "",
     repeat: ["", "start", "end", "both"].includes(measure?.repeat) ? measure.repeat : "",
+    annotation: Array.from(String(measure?.annotation || "").replace(/\s+/g, " ").trim())
+      .slice(0, 40)
+      .join(""),
   };
 }
 
