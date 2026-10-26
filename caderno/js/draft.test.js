@@ -10,6 +10,7 @@ import {
   splitMeasureAtChord,
   canMoveChordBetweenMeasures,
   moveChordBetweenMeasures,
+  removeChordFromMeasure,
   mergeMeasures,
   moveMeasure,
   splitSection,
@@ -294,6 +295,131 @@ test("evaluateMeasureBeats: calcula tempos em 4/4 (1 acorde = 4t, 2 acordes = 2+
   const eval24 = evaluateMeasureBeats(m2, "2/4");
   assert.equal(eval24.beatsPerChord, null);
   assert.equal(eval24.needsReview, false);
+});
+
+test("removeChordFromMeasure: recalcula 2 → 1 e 3 → 2 acordes sem alterar o rascunho original", () => {
+  const source = parseCifraSource(`Tom: C
+[A]
+| C D | E F G |`);
+  const original = suggestChart(source, { timeSignature: "4/4" });
+  const sectionId = original.sections[0].id;
+  const firstMeasureId = original.sections[0].measures[0].id;
+  const secondMeasureId = original.sections[0].measures[1].id;
+
+  const afterFirstRemoval = removeChordFromMeasure(original, sectionId, firstMeasureId, 1);
+  assert.notEqual(afterFirstRemoval, original);
+  assert.equal(original.sections[0].measures[0].chords, "C D");
+  assert.equal(afterFirstRemoval.sections[0].measures[0].chords, "C");
+  assert.deepEqual(evaluateMeasureBeats(afterFirstRemoval.sections[0].measures[0], "4/4").beatsPerChord, [4]);
+
+  const afterSecondRemoval = removeChordFromMeasure(afterFirstRemoval, sectionId, secondMeasureId, 1);
+  assert.equal(afterSecondRemoval.sections[0].measures[1].chords, "E G");
+  assert.deepEqual(evaluateMeasureBeats(afterSecondRemoval.sections[0].measures[1], "4/4").beatsPerChord, [2, 2]);
+  assert.equal(afterSecondRemoval.chordExclusions.length, 2);
+  assert.equal(verifyDraftInvariants(afterSecondRemoval, source).valid, true);
+});
+
+test("removeChordFromMeasure: mantém compasso vazio, identidade e marcações musicais", () => {
+  const source = parseCifraSource(`Tom: C
+[A]
+| C |`);
+  const draft = suggestChart(source, { timeSignature: "4/4" });
+  const measure = draft.sections[0].measures[0];
+  measure.repeat = "both";
+  measure.ending = "1";
+  measure.annotation = "Breque";
+
+  const updated = removeChordFromMeasure(draft, draft.sections[0].id, measure.id, 0);
+  const emptyMeasure = updated.sections[0].measures[0];
+  assert.equal(updated.sections[0].measures.length, 1);
+  assert.equal(emptyMeasure.id, measure.id);
+  assert.equal(emptyMeasure.chords, "");
+  assert.deepEqual(emptyMeasure.sourceChords, []);
+  assert.equal(emptyMeasure.repeat, "both");
+  assert.equal(emptyMeasure.ending, "1");
+  assert.equal(emptyMeasure.annotation, "Breque");
+  assert.equal(verifyDraftInvariants(updated, source).valid, true);
+});
+
+test("removeChordFromMeasure: registra a ocorrência exata quando há acordes duplicados", () => {
+  const source = parseCifraSource(`Tom: C
+[A]
+| C C | G |`);
+  const draft = suggestChart(source, { timeSignature: "4/4" });
+  const measure = draft.sections[0].measures[0];
+
+  const updated = removeChordFromMeasure(draft, draft.sections[0].id, measure.id, 1);
+  assert.equal(updated.sections[0].measures[0].chords, "C");
+  assert.equal(updated.chordExclusions[0].sourceIndex, 1);
+  assert.equal(updated.chordExclusions[0].chord, source.allChords[1]);
+  assert.equal(verifyDraftInvariants(updated, source).valid, true);
+});
+
+test("removeChordFromMeasure: undo restaura acorde e remove o registro de exclusão", () => {
+  const source = parseCifraSource(`Tom: C
+[A]
+| C D |`);
+  const draft = suggestChart(source, { timeSignature: "4/4" });
+  const history = pushDraftHistoryState(createDraftHistory(), draft);
+  const updated = removeChordFromMeasure(
+    draft,
+    draft.sections[0].id,
+    draft.sections[0].measures[0].id,
+    1
+  );
+
+  const undone = undoDraftHistoryState(history, updated);
+  assert.equal(undone.undone, true);
+  assert.equal(undone.draft.sections[0].measures[0].chords, "C D");
+  assert.deepEqual(undone.draft.chordExclusions, []);
+  assert.equal(verifyDraftInvariants(undone.draft, source).valid, true);
+});
+
+test("verifyDraftInvariants: rejeita remoção não registrada, acorde inventado e exclusão duplicada", () => {
+  const source = parseCifraSource(`Tom: C
+[A]
+| C D |`);
+  const draft = suggestChart(source, { timeSignature: "4/4" });
+  const removedWithoutRecord = structuredClone(draft);
+  removedWithoutRecord.sections[0].measures[0].sourceChords.pop();
+  removedWithoutRecord.sections[0].measures[0].chords = "C";
+  assert.equal(verifyDraftInvariants(removedWithoutRecord, source).valid, false);
+
+  const invented = structuredClone(draft);
+  invented.sections[0].measures[0].sourceChords.push({ raw: "G", normalized: "G" });
+  invented.sections[0].measures[0].chords = "C D G";
+  assert.equal(verifyDraftInvariants(invented, source).valid, false);
+
+  const removed = removeChordFromMeasure(draft, draft.sections[0].id, draft.sections[0].measures[0].id, 1);
+  removed.chordExclusions.push({ ...removed.chordExclusions[0] });
+  assert.equal(verifyDraftInvariants(removed, source).valid, false);
+});
+
+test("removeChordFromMeasure: bloqueia seção compactada e funciona em música reaberta sem fonte literal", () => {
+  const source = parseCifraSource(`Tom: C
+[A]
+| C D |`);
+  const compacted = suggestChart(source, { timeSignature: "4/4" });
+  compacted.repeatCompactions = [{ sectionId: compacted.sections[0].id }];
+  assert.equal(
+    removeChordFromMeasure(compacted, compacted.sections[0].id, compacted.sections[0].measures[0].id, 0),
+    compacted
+  );
+
+  const reopened = createDraftFromSong({
+    id: "song-1",
+    title: "Teste",
+    composer: "",
+    key: "C",
+    timeSignature: "4/4",
+    tempo: 120,
+    barsPerRow: 4,
+    sections: [{ id: "section-1", label: "A", measures: [{ id: "measure-1", chords: "C D" }] }],
+  });
+  const updated = removeChordFromMeasure(reopened, "section-1", "measure-1", 1);
+  assert.equal(updated.sections[0].measures[0].chords, "C");
+  assert.equal(updated.chordExclusions[0].sourceIndex, null);
+  assert.equal(verifyDraftInvariants(updated).valid, true);
 });
 
 test("histórico puro (undo): desfaz cada alteração preservando ordem e proveniência", () => {
