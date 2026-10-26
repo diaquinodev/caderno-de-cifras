@@ -11,6 +11,7 @@ import {
   canMoveChordBetweenMeasures,
   moveChordBetweenMeasures,
   removeChordFromMeasure,
+  updateMeasureAnnotation,
   mergeMeasures,
   moveMeasure,
   splitSection,
@@ -970,4 +971,73 @@ test("fase 21 (longRepeatedChart): expansão da cifra compactada equivale à seq
     "Paginação deve preservar cada compasso compactado exatamente uma vez"
   );
   assert.ok(compactedLayout.pages.every((page) => page.systemCount <= 5));
+});
+
+test("updateMeasureAnnotation: normaliza espaços, remove quebras de linha e limita a 40 caracteres Unicode", () => {
+  const source = parseCifraSource(`Tom: C
+[A]
+| C | G |`);
+  const draft = suggestChart(source, { timeSignature: "4/4" });
+  const sectionId = draft.sections[0].id;
+  const measureId = draft.sections[0].measures[0].id;
+
+  // Normalização de quebras de linha e espaços múltiplos
+  const textWithNewlines = "  Breque\ncom   metais\r\ne solo  ";
+  const updated1 = updateMeasureAnnotation(draft, sectionId, measureId, textWithNewlines);
+  assert.equal(updated1.sections[0].measures[0].annotation, "Breque com metais e solo");
+
+  // Limite estrito de 40 caracteres Unicode
+  const longText = "Convenção muito longa para a seção principal da música que ultrapassa quarenta";
+  const updated2 = updateMeasureAnnotation(draft, sectionId, measureId, longText);
+  assert.equal(Array.from(updated2.sections[0].measures[0].annotation).length, 40);
+
+  // Emojis / caracteres multibyte
+  const emojiText = "Solo de guitarra 🎸 com distorção pesada!".slice(0, 39) + "🔥";
+  const updated3 = updateMeasureAnnotation(draft, sectionId, measureId, emojiText);
+  assert.ok(Array.from(updated3.sections[0].measures[0].annotation).length <= 40);
+  assert.equal(verifyDraftInvariants(updated3, source).valid, true);
+});
+
+test("updateMeasureAnnotation: limpa anotação, preserva invariantes e suporta desfazer", () => {
+  const source = parseCifraSource(`Tom: C
+[A]
+| C | G |`);
+  const draft = suggestChart(source, { timeSignature: "4/4" });
+  const sectionId = draft.sections[0].id;
+  const measureId = draft.sections[0].measures[0].id;
+
+  let history = createDraftHistory();
+  history = pushDraftHistoryState(history, draft);
+
+  const annotated = updateMeasureAnnotation(draft, sectionId, measureId, "Breque");
+  assert.equal(annotated.sections[0].measures[0].annotation, "Breque");
+  assert.equal(verifyDraftInvariants(annotated, source).valid, true);
+
+  // Desfaz a alteração
+  const undone = undoDraftHistoryState(history, annotated);
+  assert.equal(undone.undone, true);
+  assert.equal(undone.draft.sections[0].measures[0].annotation, "");
+
+  // Limpa explicitamente com string vazia
+  const cleared = updateMeasureAnnotation(annotated, sectionId, measureId, "   ");
+  assert.equal(cleared.sections[0].measures[0].annotation, "");
+  assert.equal(verifyDraftInvariants(cleared, source).valid, true);
+});
+
+test("updateMeasureAnnotation: bloqueia edição em seção compactada e mergeMeasures preserva anotação", () => {
+  const source = parseCifraSource(`Tom: C
+[A]
+| C | G |`);
+  const draft = suggestChart(source, { timeSignature: "4/4" });
+  const sectionId = draft.sections[0].id;
+  const m1Id = draft.sections[0].measures[0].id;
+  const m2Id = draft.sections[0].measures[1].id;
+
+  const compacted = structuredClone(draft);
+  compacted.repeatCompactions = [{ sectionId }];
+  assert.equal(updateMeasureAnnotation(compacted, sectionId, m1Id, "Solo"), compacted);
+
+  const withAnnotation = updateMeasureAnnotation(draft, sectionId, m1Id, "Entrada suave");
+  const merged = mergeMeasures(withAnnotation, sectionId, m1Id, m2Id);
+  assert.equal(merged.sections[0].measures[0].annotation, "Entrada suave");
 });

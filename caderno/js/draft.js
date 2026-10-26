@@ -323,6 +323,7 @@ export function suggestChart(sourceInput, options = {}) {
             chords: matchedChords.map((c) => c.normalized).join(" "),
             repeat,
             ending,
+            annotation: "",
             sourceChords: matchedChords,
           });
         }
@@ -339,6 +340,7 @@ export function suggestChart(sourceInput, options = {}) {
               chords: chord.normalized,
               repeat: "",
               ending: "",
+              annotation: "",
               sourceChords: [chord],
             });
           }
@@ -352,6 +354,7 @@ export function suggestChart(sourceInput, options = {}) {
               chords: chords[0].normalized,
               repeat: "",
               ending: "",
+              annotation: "",
               sourceChords: [chords[0]],
             });
           } else if (chords.length === 2) {
@@ -360,6 +363,7 @@ export function suggestChart(sourceInput, options = {}) {
               chords: `${chords[0].normalized} ${chords[1].normalized}`,
               repeat: "",
               ending: "",
+              annotation: "",
               sourceChords: [chords[0], chords[1]],
             });
             hadHeuristicGrouping = true;
@@ -369,6 +373,7 @@ export function suggestChart(sourceInput, options = {}) {
               chords: chords[0].normalized,
               repeat: "",
               ending: "",
+              annotation: "",
               sourceChords: [chords[0]],
             });
             measures.push({
@@ -376,6 +381,7 @@ export function suggestChart(sourceInput, options = {}) {
               chords: `${chords[1].normalized} ${chords[2].normalized}`,
               repeat: "",
               ending: "",
+              annotation: "",
               sourceChords: [chords[1], chords[2]],
             });
             hadHeuristicGrouping = true;
@@ -387,6 +393,7 @@ export function suggestChart(sourceInput, options = {}) {
                 chords: pair.map((c) => c.normalized).join(" "),
                 repeat: "",
                 ending: "",
+                annotation: "",
                 sourceChords: pair,
               });
               if (pair.length > 1) hadHeuristicGrouping = true;
@@ -897,6 +904,7 @@ export function mergeMeasures(draft, sectionId, measureId1, measureId2) {
       chords: mergedChords,
       repeat,
       ending: m2.ending || m1.ending || "",
+      annotation: m1.annotation || m2.annotation || "",
       sourceChords: mergedSourceChords,
     };
 
@@ -909,6 +917,45 @@ export function mergeMeasures(draft, sectionId, measureId1, measureId2) {
     return {
       ...sec,
       measures: newMeasures,
+    };
+  });
+
+  return syncDraftMeasureWarnings({
+    ...draft,
+    sections,
+  });
+}
+
+/**
+ * Define ou atualiza a anotação curta (até 40 caracteres, sem quebras de linha)
+ * acima de um compasso do rascunho de forma pura.
+ *
+ * @param {ImportDraft} draft
+ * @param {string} sectionId
+ * @param {string} measureId
+ * @param {string} annotationText
+ * @returns {ImportDraft}
+ */
+export function updateMeasureAnnotation(draft, sectionId, measureId, annotationText) {
+  if (!draft || !Array.isArray(draft.sections)) return draft;
+  if (isSectionCompacted(draft, sectionId)) return draft;
+
+  const normalized = Array.from(String(annotationText || "").replace(/\s+/g, " ").trim())
+    .slice(0, 40)
+    .join("");
+
+  const sections = draft.sections.map((sec) => {
+    if (sec.id !== sectionId || !Array.isArray(sec.measures)) return sec;
+    const measures = sec.measures.map((m) => {
+      if (m.id !== measureId) return m;
+      return {
+        ...m,
+        annotation: normalized,
+      };
+    });
+    return {
+      ...sec,
+      measures,
     };
   });
 
