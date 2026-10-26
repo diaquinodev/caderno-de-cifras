@@ -248,4 +248,89 @@ test.describe("Caderno de Cifras - Provas Visuais Responsivas", () => {
       });
     });
   }
+
+  for (const vp of READING_PROOF_VIEWPORTS) {
+    test.describe(`Fase 35 Prova Integrada - ${vp.name} (${vp.width}x${vp.height})`, () => {
+      test.use({
+        viewport: { width: vp.width, height: vp.height },
+        hasTouch: vp.hasTouch,
+        isMobile: vp.isMobile,
+      });
+
+      test("jornada de edicao estruturada, leitura limpa e palco sem overflow", async ({ page }) => {
+        const errors = await setupPage(page, { seedPdf: false });
+        await gotoRoute(page, "#/musicas/song-cifra-test");
+
+        // 1. Abre o editor estrutural na música salva
+        await page.click('[data-action="open-structure-editor"]');
+        await expect(page.locator("#draft-title")).toHaveText("Editar Estrutura Musical");
+
+        const firstMeasure = page.locator(".draft-measure-box").first();
+        const firstChord = firstMeasure.locator(".measure-chord-token").first();
+        const box = await firstChord.boundingBox();
+        expect(box).toBeTruthy();
+        expect(box.height).toBeGreaterThanOrEqual(28);
+        expect(box.width).toBeGreaterThanOrEqual(28);
+
+        await page.screenshot({
+          path: path.join(screenshotDir, `fase35-${vp.name}-1-editor-estrutural.png`),
+          fullPage: false,
+        });
+
+        // 2. Insere anotação musical e salva
+        await firstMeasure.locator('[data-action="draft-edit-annotation"]').click();
+        const input = firstMeasure.locator(".draft-annotation-input");
+        await expect(input).toBeVisible();
+        await input.fill("Solo de sax");
+        await page.keyboard.press("Enter");
+        await expect(firstMeasure.locator(".measure-annotation-badge")).toHaveText("Solo de sax");
+
+        await page.click("#btn-draft-confirm");
+        await expect(page.locator("#draft-title")).toBeHidden();
+        await expect(page.locator(".bar .measure-annotation").first()).toHaveText("Solo de sax");
+
+        await page.screenshot({
+          path: path.join(screenshotDir, `fase35-${vp.name}-2-cifra-anotada.png`),
+          fullPage: false,
+        });
+
+        // 3. Entra na leitura limpa e valida ausência de overflow horizontal
+        await page.click('[data-action="toggle-clean"]');
+        await expect(page.locator("body")).toHaveClass(/clean/);
+        const cleanSpread = page.locator("#chart-reading-spread");
+        await expect(cleanSpread).toBeVisible();
+
+        const readingMetrics = await page.evaluate(() => ({
+          overflowX: document.documentElement.scrollWidth - window.innerWidth,
+          hasAnnotation: Boolean(document.querySelector(".reading-spread .measure-annotation")),
+        }));
+        expect(readingMetrics.overflowX).toBeLessThanOrEqual(0);
+        expect(readingMetrics.hasAnnotation).toBe(true);
+
+        await page.screenshot({
+          path: path.join(screenshotDir, `fase35-${vp.name}-3-leitura-limpa.png`),
+          fullPage: false,
+        });
+
+        await page.click('[data-action="toggle-clean"]');
+        await expect(page.locator("body")).not.toHaveClass(/clean/);
+
+        // 4. Entra no modo palco e captura evidência
+        await gotoRoute(page, "#/setlists/setlist-1/palco");
+        await expect(page.locator("#stage-picker")).toBeVisible();
+
+        const stageMetrics = await page.evaluate(() => ({
+          overflowX: document.documentElement.scrollWidth - window.innerWidth,
+        }));
+        expect(stageMetrics.overflowX).toBeLessThanOrEqual(0);
+
+        await page.screenshot({
+          path: path.join(screenshotDir, `fase35-${vp.name}-4-palco.png`),
+          fullPage: false,
+        });
+
+        expect(errors, "Nenhum erro de console").toEqual([]);
+      });
+    });
+  }
 });

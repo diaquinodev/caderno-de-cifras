@@ -2289,4 +2289,99 @@ Tom: C
 
     expect(errors).toEqual([]);
   });
+
+  test("fase 35: prova integrada da jornada de edição estruturada (apagar, desfazer, anotar, salvar e persistir sem duplicar)", async ({ page }) => {
+    const errors = await setupPage(page);
+
+    await gotoRoute(page, "#/musicas");
+    const cards = page.locator(".cards article.card");
+    const initialCount = await cards.count();
+    expect(initialCount).toBeGreaterThan(0);
+
+    // 1. Abre a música existente
+    await cards.first().locator("a").click();
+    await expect(page.locator('[data-action="open-structure-editor"]')).toBeVisible();
+
+    // 2. Reabre a estrutura no editor estrutural
+    await page.click('[data-action="open-structure-editor"]');
+    await expect(page.locator("#draft-title")).toHaveText("Editar Estrutura Musical");
+
+    // Valida que estamos no modo de edição estrutural de música salva
+    await expect(page.locator(".draft-source-column")).toHaveCount(0);
+    await expect(page.locator("#btn-draft-confirm")).toHaveText("Salvar alterações");
+
+    // 3. Seleciona o primeiro acorde e apaga
+    const firstMeasure = page.locator(".draft-measure-box").first();
+    const chordsBefore = await firstMeasure.locator(".measure-chord-token").count();
+    expect(chordsBefore).toBeGreaterThanOrEqual(1);
+
+    await firstMeasure.locator(".measure-chord-token").first().click();
+    const deleteBtn = page.locator('[data-action="draft-delete-chord"]');
+    await expect(deleteBtn).toBeVisible();
+    await deleteBtn.click();
+    await expect(page.locator("#toast")).toContainText("apagado");
+    await expect(firstMeasure.locator(".measure-chord-token")).toHaveCount(chordsBefore - 1);
+
+    // 4. Desfaz a exclusão com Control+z
+    await page.keyboard.press("Control+z");
+    await expect(page.locator("#toast")).toContainText("Ação desfeita");
+    await expect(firstMeasure.locator(".measure-chord-token")).toHaveCount(chordsBefore);
+
+    // 5. Apaga novamente
+    await firstMeasure.locator(".measure-chord-token").first().click();
+    await deleteBtn.click();
+    await expect(firstMeasure.locator(".measure-chord-token")).toHaveCount(chordsBefore - 1);
+
+    // 6. Insere anotação no primeiro compasso
+    await firstMeasure.locator('[data-action="draft-edit-annotation"]').click();
+    const annotationInput = firstMeasure.locator(".draft-annotation-input");
+    await expect(annotationInput).toBeVisible();
+    await annotationInput.fill("Solo de Introdução");
+    await page.keyboard.press("Enter");
+    await expect(firstMeasure.locator(".measure-annotation-badge")).toHaveText("Solo de Introdução");
+
+    // 7. Confirma e salva a música
+    await page.locator("#btn-draft-confirm").click();
+    await expect(page.locator("#toast")).toContainText("atualizada com sucesso");
+    await expect(page.locator("#draft-title")).toBeHidden();
+
+    // 8. Verifica na biblioteca que não houve duplicação
+    await gotoRoute(page, "#/musicas");
+    await expect(page.locator(".cards article.card")).toHaveCount(initialCount);
+
+    // 9. Reabre a música e verifica persistência visual na cifra normal
+    await page.locator(".cards article.card").first().locator("a").click();
+    const sheetAnnotation = page.locator(".bar .measure-annotation").first();
+    await expect(sheetAnnotation).toBeVisible();
+    await expect(sheetAnnotation).toHaveText("Solo de Introdução");
+
+    // 10. Reabre o editor estrutural na música já alterada e adiciona segunda edição
+    await page.click('[data-action="open-structure-editor"]');
+    await expect(page.locator("#draft-title")).toHaveText("Editar Estrutura Musical");
+    const reloadedFirstMeasure = page.locator(".draft-measure-box").first();
+    await expect(reloadedFirstMeasure.locator(".measure-annotation-badge")).toHaveText("Solo de Introdução");
+    await expect(reloadedFirstMeasure.locator(".measure-chord-token")).toHaveCount(chordsBefore - 1);
+
+    // Altera a anotação existente
+    await reloadedFirstMeasure.locator('[data-action="draft-edit-annotation"]').click();
+    await reloadedFirstMeasure.locator(".draft-annotation-input").fill("Solo definitivo");
+    await reloadedFirstMeasure.locator('[data-action="draft-save-annotation"]').click();
+    await expect(reloadedFirstMeasure.locator(".measure-annotation-badge")).toHaveText("Solo definitivo");
+
+    await page.locator("#btn-draft-confirm").click();
+    await expect(page.locator("#toast")).toContainText("atualizada com sucesso");
+
+    // 11. Validações geométricas no modo de leitura limpa
+    await page.click('[data-action="toggle-clean"]');
+    await expect(page.locator("body")).toHaveClass(/clean/);
+    const metrics = await page.evaluate(() => ({
+      overflowX: document.documentElement.scrollWidth - window.innerWidth,
+      annotationVisible: Boolean(document.querySelector(".reading-spread .measure-annotation")),
+    }));
+    expect(metrics.overflowX).toBeLessThanOrEqual(0);
+    expect(metrics.annotationVisible).toBe(true);
+    await page.click('[data-action="toggle-clean"]');
+
+    expect(errors).toEqual([]);
+  });
 });
