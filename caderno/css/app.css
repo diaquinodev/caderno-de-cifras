@@ -1279,6 +1279,9 @@ body.clean .pdf-read { height: 100dvh; }
     grid-template-columns: 1fr 1.3fr;
     align-items: start;
   }
+  .draft-review-layout.draft-single-column {
+    grid-template-columns: 1fr !important;
+  }
   .draft-view-tabs {
     display: none !important;
   }
@@ -1465,6 +1468,26 @@ body.clean .pdf-read { height: 100dvh; }
   min-width: 32px;
   padding: 2px 6px;
   font-size: 12px;
+}
+
+.draft-measure-box .measure-chord-actions [data-action="draft-delete-chord"] {
+  color: #cf1322;
+  border-color: rgba(207, 19, 34, 0.4);
+}
+
+.draft-measure-box .measure-chord-actions [data-action="draft-delete-chord"]:hover,
+.draft-measure-box .measure-chord-actions [data-action="draft-delete-chord"]:focus-visible {
+  background: #fff1f0;
+  border-color: #cf1322;
+}
+
+@media (pointer: coarse) {
+  .draft-measure-box .measure-chord-actions button {
+    min-height: 44px;
+    min-width: 44px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
 }
 
 .sr-only {
