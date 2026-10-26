@@ -659,7 +659,7 @@ body.clean .video-dock { display: none; }
 body.stage #sidebar { display: none !important; }
 body.stage #app { grid-template-columns: 1fr; }
 body.stage { background: #4a4a4a; }
-body.stage main { max-width: 1440px; margin: 0 auto; padding: 12px 16px 24px; }
+body.stage main { width: 100%; max-width: 1440px; margin: 0 auto; padding: 12px 16px 24px; }
 .stage-bar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 16px; }
 .stage-bar select { min-width: 240px; color: var(--paper); background: var(--walnut-2); border: 1px solid rgba(243, 238, 228, 0.2); padding: 8px; }
 
