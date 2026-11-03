@@ -12,7 +12,9 @@ export default defineConfig({
   reporter: [["list"]],
   use: {
     baseURL: "http://127.0.0.1:4173",
-    trace: "on-first-retry",
+    // Sem retries, "on-first-retry" nunca gravava nada: guarda diagnóstico só quando falha.
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
   },
   webServer: {
     command: "node caderno/serve.mjs",

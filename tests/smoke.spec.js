@@ -1938,7 +1938,9 @@ test.describe("Caderno de Cifras - Smoke E2E", () => {
       expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
 
       if (viewport.width === 768) {
-        await spread.screenshot({ path: "tests/screenshots/fase23-tablet-densidade-por-sistema.png" });
+        // Captura da janela: a do elemento falhava no CI quando o redesenho pós-resize
+        // trocava o nó no meio da captura ("Element is not attached to the DOM").
+        await page.screenshot({ path: "tests/screenshots/fase23-tablet-densidade-por-sistema.png" });
       }
 
       await page.click('[data-action="toggle-clean"]');
